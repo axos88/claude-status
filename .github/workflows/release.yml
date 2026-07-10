@@ -1,27 +1,37 @@
 name: release
 
-# Cut a release by pushing a version tag:
-#   git tag v0.1.0 && git push origin v0.1.0
-# This creates a GitHub Release and attaches a prebuilt binary (with a sha256
-# checksum) for each target below, so users can run claude-status without a
-# Rust toolchain.
+# Every push to `main` refreshes a single rolling "latest" GitHub Release,
+# rebuilding and re-attaching a prebuilt binary (+ sha256 checksum) for each
+# target below. Users can then download from:
+#   https://github.com/<owner>/claude-status/releases/latest/download/<asset>
+# without needing a Rust toolchain.
 
 on:
   push:
-    tags:
-      - "v[0-9]+.*"
+    branches: [main]
+  workflow_dispatch: # allow manual re-runs from the Actions tab
 
 permissions:
-  contents: write # create the release and upload assets
+  contents: write # create the release / move the tag / upload assets
 
 jobs:
   create-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: taiki-e/create-gh-release-action@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      # Recreate the `latest` release+tag at the current commit so its assets
+      # are always the freshest build and stale ones don't linger.
+      - name: Refresh the rolling "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" || true
+          gh release create latest \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Latest build" \
+            --notes "Rolling build of the latest commit on main ($GITHUB_SHA)." \
+            --latest
 
   upload-assets:
     needs: create-release
@@ -53,13 +63,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      # Builds with the release profile (see Cargo.toml — size-optimized but
-      # NOT stripping the symbol table, so panic backtraces stay readable),
+      # Builds with the size-optimized release profile (see Cargo.toml — it does
+      # NOT strip the symbol table, so panic backtraces stay readable),
       # auto-using `cross` for the Linux cross targets, then archives the binary
-      # (.tar.gz on unix, .zip on windows) and uploads it to the release.
+      # (.tar.gz on unix, .zip on windows) and uploads it to the `latest`
+      # release created above.
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: claude-status
           target: ${{ matrix.target }}
           checksum: sha256
+          locked: true
+          ref: refs/tags/latest
           token: ${{ secrets.GITHUB_TOKEN }}

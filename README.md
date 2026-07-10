@@ -28,10 +28,8 @@ both how full a limit is and how long until it clears:
 When any limit is red (> 90%), the 🧠 context bar collapses to just its
 percentage to save room.
 
-It's kept in lockstep with the original `statusline.sh`, which lives in this repo
-as an independent differential-test reference. At ~1 ms per invocation the Rust
-binary is roughly 20–40× faster than the bash + `jq` original, and depends on no
-external binaries at runtime.
+It began life as a bash + `jq` script; at ~1 ms per invocation this Rust
+rewrite is roughly 20–40× faster, and depends on no external binaries at runtime.
 
 ## Install
 
@@ -39,30 +37,39 @@ external binaries at runtime.
 
 ### Download a prebuilt binary (no Rust toolchain needed)
 
-Every tagged release ships a prebuilt binary per platform on the
-[Releases page](https://github.com/<owner>/claude-status/releases/latest),
-each with a `.sha256` checksum. Pick the archive for your OS/CPU:
+The `latest` release always carries a prebuilt binary per platform (each with a
+`.sha256` checksum alongside). Copy-paste the one line for your platform — it
+downloads and installs `claude-status` to `~/.local/bin` (make sure that's on
+your `PATH`):
 
-| OS | CPU | Archive |
-|----|-----|---------|
-| Linux | x86_64 | `claude-status-x86_64-unknown-linux-gnu.tar.gz` (or `-musl` for a fully static build) |
-| Linux | ARM64 | `claude-status-aarch64-unknown-linux-gnu.tar.gz` (or `-musl`) |
-| macOS | Apple Silicon | `claude-status-aarch64-apple-darwin.tar.gz` |
-| macOS | Intel | `claude-status-x86_64-apple-darwin.tar.gz` |
-| Windows | x86_64 | `claude-status-x86_64-pc-windows-msvc.zip` |
-
-Linux x86_64, for example — download, verify, extract to `~/.local/bin`:
-
+**Linux — x86_64**
 ```sh
-base=https://github.com/<owner>/claude-status/releases/latest/download
-curl -LO $base/claude-status-x86_64-unknown-linux-gnu.tar.gz
-curl -LO $base/claude-status-x86_64-unknown-linux-gnu.tar.gz.sha256
-sha256sum -c claude-status-x86_64-unknown-linux-gnu.tar.gz.sha256
-tar -xzf claude-status-x86_64-unknown-linux-gnu.tar.gz -C ~/.local/bin claude-status
+mkdir -p ~/.local/bin && curl -fsSL https://github.com/<owner>/claude-status/releases/latest/download/claude-status-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.local/bin claude-status
 ```
 
-(On macOS, `shasum -a 256 -c` instead of `sha256sum -c`. On Windows, unzip and
-place `claude-status.exe` somewhere on your `PATH`.)
+**Linux — ARM64**
+```sh
+mkdir -p ~/.local/bin && curl -fsSL https://github.com/<owner>/claude-status/releases/latest/download/claude-status-aarch64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.local/bin claude-status
+```
+
+**macOS — Apple Silicon**
+```sh
+mkdir -p ~/.local/bin && curl -fsSL https://github.com/<owner>/claude-status/releases/latest/download/claude-status-aarch64-apple-darwin.tar.gz | tar -xz -C ~/.local/bin claude-status
+```
+
+**macOS — Intel**
+```sh
+mkdir -p ~/.local/bin && curl -fsSL https://github.com/<owner>/claude-status/releases/latest/download/claude-status-x86_64-apple-darwin.tar.gz | tar -xz -C ~/.local/bin claude-status
+```
+
+**Windows — x86_64** (PowerShell)
+```powershell
+irm https://github.com/<owner>/claude-status/releases/latest/download/claude-status-x86_64-pc-windows-msvc.zip -OutFile claude-status.zip; Expand-Archive -Force claude-status.zip .
+```
+
+On Linux, swap `-gnu` for `-musl` in the URL to get a fully static binary that
+runs on any distro. Every asset has a matching `<asset>.sha256` on the release
+if you want to verify the download first.
 
 ### Build from source
 
@@ -85,31 +92,27 @@ In `~/.claude/settings.json`, set the `command` to wherever you put the binary:
 ## Testing
 
 ```sh
-cargo build --release
-bash tests/diff_against_bash.sh   # renders must match statusline.sh on every branch
+cargo test
 ```
 
-The harness feeds fixtures covering every branch — each color/unit threshold,
-the flashing and over-limit zones, missing metrics, the cwd fallback, and the
-context collapse — through both the Rust binary and the shell reference and
-diffs their output. Static fixtures (< 95%) are diffed **with ANSI intact** so
-color is actually verified; only the flashing fixtures (≥ 95%) strip ANSI, since
-their per-second pulse is time-dependent. Malformed input is checked separately:
-the Rust port degrades to documented defaults rather than the shell's `""`→`0`
-coercion.
+`render()` is pure over `(JSON, now)`, so the tests in `src/lib.rs` drive it with
+a fixed clock and assert exact output across every branch — the color/unit
+thresholds (75, 90), the flashing zone (95, checked on both even and odd seconds
+via `now`), the over-limit layout, the context collapse, missing metrics, the
+cwd fallback, and malformed input degrading to defaults.
 
 ## Releases
 
-Pushing a version tag builds and publishes the binaries via
-[`.github/workflows/release.yml`](.github/workflows/release.yml):
-
-```sh
-git tag v0.1.0 && git push origin v0.1.0
-```
+Every push to `main` runs [`.github/workflows/release.yml`](.github/workflows/release.yml),
+which rebuilds all targets and refreshes a single rolling **`latest`** GitHub
+Release with the fresh binaries (and their `sha256` checksums) — so the download
+commands above always fetch the newest build. No manual tagging needed.
 
 The [release profile](Cargo.toml) is tuned for a small binary — `opt-level="z"`,
 fat LTO, a single codegen unit, and `panic="abort"` — but deliberately keeps the
 symbol table (`strip="debuginfo"`) so **panic backtraces still resolve to
-function names**. Full DWARF is dropped, which shrinks the Linux x86_64 binary
-from ~2 MB to ~410 KB; a panic still prints its exact source location plus a
-symbolicated stack (set `RUST_BACKTRACE=1`).
+function names** on Linux and macOS. Full DWARF is dropped, which shrinks the
+Linux x86_64 binary from ~2 MB to ~410 KB; a panic still prints its exact source
+location plus a symbolicated stack (set `RUST_BACKTRACE=1`). (On Windows, symbols
+live in a separate `.pdb` that the release archive doesn't ship, so backtrace
+frames there show addresses only — the panic location is still printed.)
