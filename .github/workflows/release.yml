@@ -14,6 +14,12 @@ on:
 permissions:
   contents: write # create the release / move the tag / upload assets
 
+# Only one release run at a time — a newer push supersedes an in-flight one,
+# so they can't race on the delete-and-recreate of the `latest` release.
+concurrency:
+  group: release
+  cancel-in-progress: true
+
 jobs:
   create-release:
     runs-on: ubuntu-latest
