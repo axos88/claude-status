@@ -33,6 +33,27 @@ rewrite is roughly 20–40× faster, and depends on no external binaries at runt
 
 ## Install
 
+### Let Claude Code install it for you
+
+Paste this into a fresh Claude Code session and let it do the work — it picks the
+right binary for your machine, installs it, and wires up the status line:
+
+```text
+Install the claude-status status line for Claude Code from
+https://github.com/axos88/claude-status. Detect my OS and CPU architecture, then
+download the matching prebuilt binary from that repo's latest GitHub release
+(assets are named claude-status-<target>.tar.gz, or .zip on Windows) — do not
+compile from source. Extract the claude-status binary to ~/.local/bin (create it
+and add it to my PATH if needed; on Windows use a suitable PATH location) and make
+it executable. Then merge a statusLine entry into ~/.claude/settings.json without
+disturbing my other settings:
+  "statusLine": { "type": "command", "command": "<path to the binary>", "refreshInterval": 1 }
+Finally, confirm it works by piping the binary a sample status JSON and showing me
+the rendered line.
+```
+
+Prefer to do it yourself? Use one of the methods below.
+
 ### Download a prebuilt binary (no Rust toolchain needed)
 
 The `latest` release always carries a prebuilt binary per platform (each with a
