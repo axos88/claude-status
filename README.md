@@ -10,6 +10,10 @@ reads that JSON and prints a single line:
 🤖 Opus  📁 claude-status  🧠 [██████░░░░] 63%  ⏳ 4d [█████░░░░░] 45%  📅 2h [███████░░░] 72%
 ```
 
+![The claude-status status bar shown at three usage levels — comfortable, tightening, and over the limit](docs/screenshot.png)
+
+<sub>The same status bar at three usage levels: comfortable, tightening, and over the 5-hour limit.</sub>
+
 - 🤖 model family · 📁 current folder · 🧠 context window · ⏳ 5-hour limit · 📅 7-day limit
 - Each usage metric renders as **icon · reset-countdown · progress-bar · %**, and
   everything in it shares one threshold color driven by the percentage.
