@@ -7,22 +7,31 @@ status JSON to **stdin** and using **stdout** as the status line. This binary
 reads that JSON and prints a single line:
 
 ```
-🤖 Opus  📁 claude-status  🧠 [██████░░░░] 63%  ⏳ [█████░░░░░] 45%  📅 [███████░░░] 72%
+🤖 Opus  📁 claude-status  🧠 [██████░░░░] 63%  ⏳ 4d [█████░░░░░] 45%  📅 2h [███████░░░] 72%
 ```
 
 - 🤖 model family · 📁 current folder · 🧠 context window · ⏳ 5-hour limit · 📅 7-day limit
-- Each usage metric shows, between its icon and a colored progress bar
-  (green < 60%, yellow < 85%, red ≥ 85%), the time until that limit resets as
-  its single highest-magnitude unit (e.g. `4d`, `2h`, `50m`), in the same color
-  as the bar.
-- When a rate limit is **near** (90–99%) its bar is replaced by a live, pulsing
-  countdown to reset shown to two units (e.g. `1h 56m`); at **100%** it shows ⛔
-  plus that two-unit countdown and the reset clock. When any limit is near, the
-  context bar collapses to just its percentage.
+- Each usage metric renders as **icon · reset-countdown · progress-bar · %**, and
+  everything in it shares one threshold color driven by the percentage.
 
-It's a port of the original `statusline.sh` (kept in this repo as the
-differential-test reference). At ~1 ms per invocation it's roughly 20–40× faster
-than the bash + `jq` original, and depends on no external binaries at runtime.
+The reset countdown and its styling escalate with usage, so a glance tells you
+both how full a limit is and how long until it clears:
+
+| Usage | Color | Countdown | Flashing | Bar |
+|------:|-------|-----------|:--------:|-----|
+| ≤ 75% | 🟢 green | 1 unit (`4d`) | – | ✓ |
+| 76–90% | 🟡 yellow | 1 unit (`4d`) | – | ✓ |
+| 91–94% | 🔴 red | 2 units (`4d 15h`) | – | ✓ |
+| 95–99% | 🔴 red | 2 units | ⚡ pulses red↔dark-red | ✓ |
+| ≥ 100% | 🔴 red | 2 units | ⚡ | — replaced by ⛔ |
+
+When any limit is red (> 90%), the 🧠 context bar collapses to just its
+percentage to save room.
+
+It's kept in lockstep with the original `statusline.sh`, which lives in this repo
+as an independent differential-test reference. At ~1 ms per invocation the Rust
+binary is roughly 20–40× faster than the bash + `jq` original, and depends on no
+external binaries at runtime.
 
 ## Build & install
 
@@ -47,9 +56,11 @@ cargo build --release
 bash tests/diff_against_bash.sh   # renders must match statusline.sh on every branch
 ```
 
-The test harness feeds fixtures covering each branch (normal / near / hit /
-missing metrics / cwd fallback / thresholds) through both the Rust binary and
-the original shell script and diffs the output (ANSI stripped, since the
-per-second blink is time-dependent). Malformed input is checked separately: the
-Rust port degrades to documented defaults rather than the shell's `""`→`0`
+The harness feeds fixtures covering every branch — each color/unit threshold,
+the flashing and over-limit zones, missing metrics, the cwd fallback, and the
+context collapse — through both the Rust binary and the shell reference and
+diffs their output. Static fixtures (< 95%) are diffed **with ANSI intact** so
+color is actually verified; only the flashing fixtures (≥ 95%) strip ANSI, since
+their per-second pulse is time-dependent. Malformed input is checked separately:
+the Rust port degrades to documented defaults rather than the shell's `""`→`0`
 coercion.

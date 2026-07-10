@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Claude Code status line — shared by the default `claude` and `claude-akos` configs.
-# Layout:  🤖 <family>  │  📁 <folder>  │  🧠 <ctx>  │  5h <…>  │  7d <…>
-# Normal:  each usage metric shows a colored progress bar + %.
-# Near/hit (>=90%): that metric's bar is replaced by its next reset clock time
-#                   (yellow approaching, red once hit). When ANY limit is near,
-#                   the context bar is dropped too — only its % remains.
+# Claude Code status line — reference implementation, kept in lockstep with the
+# Rust port (src/main.rs) as the differential-test baseline (tests/).
+# Layout:  🤖 <family>  📁 <folder>  🧠 <ctx>  ⏳ <5h>  📅 <7d>
+# Each usage metric: icon  reset-countdown  progress-bar  pct%, all one color
+# (green <=75, yellow 76-90, red >90). The countdown shows two units in the red
+# zone (one below), pulses red<->dark-red at >=95%, and at >=100% the bar/% are
+# dropped for a ⛔. When ANY limit is red (>90), the context bar collapses to %.
 
 input=$(cat)
 
@@ -35,17 +36,16 @@ esac
 
 dim=$'\033[2m'; reset=$'\033[0m'; bold=$'\033[1m'; cyan=$'\033[36m'; mag=$'\033[35m'
 red=$'\033[31m'; yel=$'\033[33m'; grn=$'\033[32m'
-# per-second countdown pulse palettes
-byel=$'\033[93m'; brown=$'\033[38;5;130m'   # near mode: bright yellow <-> brown
-dred=$'\033[38;5;88m'                        # hit mode:  red <-> dark red
+# per-second countdown pulse: red <-> dark red, when >= 95%
+dred=$'\033[38;5;88m'
 
 # --- helpers ------------------------------------------------------------------
-# threshold color for a percentage: green < 60, yellow < 85, red otherwise
+# threshold color for a percentage: green <= 75, yellow 76-90, red > 90
 color_for() {
   local pct=$1
-  if   (( pct >= 85 )); then printf '%s' "$red"
-  elif (( pct >= 60 )); then printf '%s' "$yel"
-  else                       printf '%s' "$grn"
+  if   (( pct > 90 )); then printf '%s' "$red"
+  elif (( pct > 75 )); then printf '%s' "$yel"
+  else                      printf '%s' "$grn"
   fi
 }
 
@@ -89,34 +89,32 @@ fmt_left() {
   fi
 }
 
-# usage metric:
-#   normal (<90%) -> colored progress bar
-#   near (90-99%) -> percentage + live countdown until reset
-#   hit  (100%)   -> red error emoji + countdown (no percentage)
+# usage metric:  icon  countdown  bar  pct%
+#   color: green <=75, yellow 76-90, red >90 (bar, %, countdown all share it)
+#   countdown: two units in the red zone (>90), one unit below it
+#   flashing:  countdown pulses red<->dark-red at >=95%
+#   at >=100%: the bar and % are dropped — countdown + ⛔ only
 metric() {
-  local label=$1 pct=$2 resets_at=$3 cd="" clock=""
-  if (( resets_at > 0 )); then
-    cd=$(fmt_left $(( resets_at - now )))
-    clock=$(date -d "@$resets_at" +%H:%M 2>/dev/null)
+  local label=$1 pct=$2 resets_at=$3
+  local color cd_color cd="" txt
+  color=$(color_for "$pct")
+  # countdown color: pulse each second once near the ceiling
+  cd_color=$color
+  if (( pct >= 95 )); then
+    (( now % 2 == 0 )) && cd_color=$red || cd_color=$dred
   fi
-  # alternate colors each second so feedback is perceived even when the
-  # displayed digits don't change (e.g. in the "1h 23m" range)
+  # countdown text: two units in the red zone, one unit below it
+  if (( resets_at > 0 )); then
+    if (( pct > 90 )); then txt=$(fmt_left $(( resets_at - now )))
+    else                    txt=$(fmt_top  $(( resets_at - now )))
+    fi
+    cd="${cd_color}${txt}${reset} "
+  fi
   if (( pct >= 100 )); then
-    local blink tail=""
-    (( now % 2 == 0 )) && blink=$red || blink=$dred
-    [ -n "$cd" ] && tail=" ${blink}${cd}${reset}"
-    [ -n "$clock" ] && tail+=" ${dim}@ ${clock}${reset}"
-    printf '%s%s%s ⛔%s' "$dim" "$label" "$reset" "$tail"
-  elif (( pct >= 90 )); then
-    local blink tail=""
-    (( now % 2 == 0 )) && blink=$byel || blink=$brown
-    [ -n "$cd" ] && tail=" ${blink}${cd}${reset}"
-    printf '%s%s%s %s%d%%%s%s' "$dim" "$label" "$reset" "$yel" "$pct" "$reset" "$tail"
+    # over the limit: the countdown replaces the bar, flagged with ⛔
+    printf '%s%s%s %s⛔' "$dim" "$label" "$reset" "$cd"
   else
-    # normal mode: reset countdown (single highest-magnitude unit) sits
-    # between the icon and the bar, colored to match the bar/percentage
-    local cd=""
-    (( resets_at > 0 )) && cd="$(color_for "$pct")$(fmt_top $(( resets_at - now )))${reset} "
+    # countdown sits between the icon and the bar, sharing its color
     printf '%s%s%s %s%s' "$dim" "$label" "$reset" "$cd" "$(bar "$pct")"
   fi
 }
@@ -126,8 +124,8 @@ sep="  "
 # --- assemble -----------------------------------------------------------------
 OUT="${bold}${mag}🤖 ${MODEL}${reset}${sep}${cyan}📁 ${FOLDER}${reset}${sep}"
 
-# context: bar normally, but only the % if any limit is near
-if (( F_INT >= 90 || S_INT >= 90 )); then
+# context: bar normally, but only the % if any limit is in the red zone
+if (( F_INT > 90 || S_INT > 90 )); then
   OUT+="🧠 $(color_for "$CTX_INT")${CTX_INT}%${reset}"
 else
   OUT+="🧠 $(bar "$CTX_INT")"

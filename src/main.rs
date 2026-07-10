@@ -1,20 +1,20 @@
 // Claude Code status line renderer.
 //
 // Reads the status-line JSON on stdin and prints a single line:
-//   🤖 <family>  │  📁 <folder>  │  🧠 <ctx>  │  ⏳ <5h>  │  📅 <7d>
+//   🤖 <family>  📁 <folder>  🧠 <ctx>  ⏳ <5h>  📅 <7d>
 //
-// Normal:  each usage metric shows a colored progress bar + %.
-// Near/hit (>=90%): that metric's bar is replaced by a live countdown until its
-//                   next reset (yellow approaching, red once hit). When ANY limit
-//                   is near, the context bar is dropped too — only its % remains.
+// Each usage metric renders as:  icon  reset-countdown  progress-bar  pct%,
+// all sharing one threshold color (green <=75, yellow 76-90, red >90). The
+// countdown shows two units in the red zone (one unit below it), pulses
+// red<->dark-red at >=95%, and at >=100% the bar and % are dropped in favor of
+// a ⛔. When ANY limit is red (>90), the context bar collapses to just its %.
 //
-// This is a port of the original statusline.sh; behavior is intended to match it
-// cell-for-cell (see tests/ for the differential fixtures).
+// statusline.sh is kept in lockstep as an independent reference; tests/ diff the
+// two implementations cell-for-cell.
 
 use std::io::Read;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::{Local, TimeZone};
 use serde_json::Value;
 
 // --- ANSI palette ------------------------------------------------------------
@@ -26,10 +26,8 @@ const MAG: &str = "\x1b[35m";
 const RED: &str = "\x1b[31m";
 const YEL: &str = "\x1b[33m";
 const GRN: &str = "\x1b[32m";
-// per-second countdown pulse palettes
-const BYEL: &str = "\x1b[93m"; // near mode: bright yellow <-> brown
-const BROWN: &str = "\x1b[38;5;130m";
-const DRED: &str = "\x1b[38;5;88m"; // hit mode: red <-> dark red
+// per-second countdown pulse: red <-> dark red, when >= 95%
+const DRED: &str = "\x1b[38;5;88m";
 
 const SEP: &str = "  ";
 
@@ -55,11 +53,11 @@ fn text(v: &Value, path: &[&str], default: &str) -> String {
         .unwrap_or_else(|| default.to_owned())
 }
 
-/// threshold color for a percentage: green < 60, yellow < 85, red otherwise
+/// threshold color for a percentage: green ≤ 75, yellow 76–90, red > 90
 fn color_for(pct: i64) -> &'static str {
-    if pct >= 85 {
+    if pct > 90 {
         RED
-    } else if pct >= 60 {
+    } else if pct > 75 {
         YEL
     } else {
         GRN
@@ -128,44 +126,36 @@ fn fmt_left(mut s: i64) -> String {
 ///   near (90-99%) -> percentage + live countdown until reset
 ///   hit  (100%)   -> red error emoji + countdown (no percentage)
 fn metric(label: &str, pct: i64, resets_at: i64, now: i64) -> String {
-    let mut cd = String::new();
-    let mut clock = String::new();
-    if resets_at > 0 {
-        cd = fmt_left(resets_at - now);
-        clock = Local
-            .timestamp_opt(resets_at, 0)
-            .single()
-            .map(|dt| dt.format("%H:%M").to_string())
-            .unwrap_or_default();
-    }
-
-    // alternate colors each second so feedback is perceived even when the
-    // displayed digits don't change (e.g. in the "1h 23m" range)
-    if pct >= 100 {
-        let blink = if now % 2 == 0 { RED } else { DRED };
-        let mut tail = String::new();
-        if !cd.is_empty() {
-            tail = format!(" {blink}{cd}{RESET}");
-        }
-        if !clock.is_empty() {
-            tail.push_str(&format!(" {DIM}@ {clock}{RESET}"));
-        }
-        format!("{DIM}{label}{RESET} ⛔{tail}")
-    } else if pct >= 90 {
-        let blink = if now % 2 == 0 { BYEL } else { BROWN };
-        let mut tail = String::new();
-        if !cd.is_empty() {
-            tail = format!(" {blink}{cd}{RESET}");
-        }
-        format!("{DIM}{label}{RESET} {YEL}{pct}%{RESET}{tail}")
-    } else {
-        // normal mode: reset countdown (single highest-magnitude unit) sits
-        // between the icon and the bar, colored to match the bar/percentage
-        let cd = if resets_at > 0 {
-            format!("{}{}{RESET} ", color_for(pct), fmt_top(resets_at - now))
+    let color = color_for(pct);
+    // countdown color: pulse red<->dark-red each second once near the ceiling,
+    // so motion is perceived even when the displayed digits don't change
+    let cd_color = if pct >= 95 {
+        if now % 2 == 0 {
+            RED
         } else {
-            String::new()
+            DRED
+        }
+    } else {
+        color
+    };
+    // countdown text: two units in the red zone (>90), one unit below it
+    let cd = if resets_at > 0 {
+        let secs = resets_at - now;
+        let txt = if pct > 90 {
+            fmt_left(secs)
+        } else {
+            fmt_top(secs)
         };
+        format!("{cd_color}{txt}{RESET} ")
+    } else {
+        String::new()
+    };
+
+    if pct >= 100 {
+        // over the limit: the countdown replaces the bar, flagged with ⛔
+        format!("{DIM}{label}{RESET} {cd}⛔")
+    } else {
+        // countdown sits between the icon and the bar, sharing its color
         format!("{DIM}{label}{RESET} {cd}{}", bar(pct))
     }
 }
@@ -221,8 +211,8 @@ fn render(v: &Value, now: i64) -> String {
 
     let mut out = format!("{BOLD}{MAG}🤖 {model}{RESET}{SEP}{CYAN}📁 {folder}{RESET}{SEP}");
 
-    // context: bar normally, but only the % if any limit is near
-    if five >= 90 || seven >= 90 {
+    // context: bar normally, but only the % if any limit is in the red zone
+    if five > 90 || seven > 90 {
         // raw ctx, unclamped — matches the bash near-context branch
         out.push_str(&format!("🧠 {}{ctx}%{RESET}", color_for(ctx)));
     } else {
