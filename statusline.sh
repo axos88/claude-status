@@ -113,11 +113,11 @@ metric() {
     [ -n "$cd" ] && tail=" ${blink}${cd}${reset}"
     printf '%s%s%s %s%d%%%s%s' "$dim" "$label" "$reset" "$yel" "$pct" "$reset" "$tail"
   else
-    # normal mode: bar + always-on reset countdown at its single
-    # highest-magnitude unit (dim, since it's ancillary here)
-    local tail=""
-    (( resets_at > 0 )) && tail=" ${dim}$(fmt_top $(( resets_at - now )))${reset}"
-    printf '%s%s%s %s%s' "$dim" "$label" "$reset" "$(bar "$pct")" "$tail"
+    # normal mode: reset countdown (single highest-magnitude unit) sits
+    # between the icon and the bar, colored to match the bar/percentage
+    local cd=""
+    (( resets_at > 0 )) && cd="$(color_for "$pct")$(fmt_top $(( resets_at - now )))${reset} "
+    printf '%s%s%s %s%s' "$dim" "$label" "$reset" "$cd" "$(bar "$pct")"
   fi
 }
 

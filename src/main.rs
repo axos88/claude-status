@@ -159,13 +159,14 @@ fn metric(label: &str, pct: i64, resets_at: i64, now: i64) -> String {
         }
         format!("{DIM}{label}{RESET} {YEL}{pct}%{RESET}{tail}")
     } else {
-        // normal mode: bar + always-on reset countdown at its single
-        // highest-magnitude unit (dim, since it's ancillary here)
-        let mut s = format!("{DIM}{label}{RESET} {}", bar(pct));
-        if resets_at > 0 {
-            s.push_str(&format!(" {DIM}{}{RESET}", fmt_top(resets_at - now)));
-        }
-        s
+        // normal mode: reset countdown (single highest-magnitude unit) sits
+        // between the icon and the bar, colored to match the bar/percentage
+        let cd = if resets_at > 0 {
+            format!("{}{}{RESET} ", color_for(pct), fmt_top(resets_at - now))
+        } else {
+            String::new()
+        };
+        format!("{DIM}{label}{RESET} {cd}{}", bar(pct))
     }
 }
 
