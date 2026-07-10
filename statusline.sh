@@ -4,8 +4,9 @@
 # Layout:  🤖 <family>  📁 <folder>  🧠 <ctx>  ⏳ <5h>  📅 <7d>
 # Each usage metric: icon  reset-countdown  progress-bar  pct%, all one color
 # (green <=75, yellow 76-90, red >90). The countdown shows two units in the red
-# zone (one below), pulses red<->dark-red at >=95%, and at >=100% the bar/% are
-# dropped for a ⛔. When ANY limit is red (>90), the context bar collapses to %.
+# zone (one below), pulses red<->dark-red at >=95%, and at >=100% the bar is
+# dropped, leaving "⛔ <pct>% <countdown>". When ANY limit is red (>90), the
+# context bar collapses to just its %.
 
 input=$(cat)
 
@@ -108,14 +109,18 @@ metric() {
     if (( pct > 90 )); then txt=$(fmt_left $(( resets_at - now )))
     else                    txt=$(fmt_top  $(( resets_at - now )))
     fi
-    cd="${cd_color}${txt}${reset} "
+    cd="${cd_color}${txt}${reset}"
   fi
   if (( pct >= 100 )); then
-    # over the limit: the countdown replaces the bar, flagged with ⛔
-    printf '%s%s%s %s⛔' "$dim" "$label" "$reset" "$cd"
+    # over the limit: no bar — ⛔ flag, percentage, then the countdown
+    local tail=""
+    [ -n "$cd" ] && tail=" ${cd}"
+    printf '%s%s%s ⛔ %s%d%%%s%s' "$dim" "$label" "$reset" "$color" "$pct" "$reset" "$tail"
   else
     # countdown sits between the icon and the bar, sharing its color
-    printf '%s%s%s %s%s' "$dim" "$label" "$reset" "$cd" "$(bar "$pct")"
+    local lead=""
+    [ -n "$cd" ] && lead="${cd} "
+    printf '%s%s%s %s%s' "$dim" "$label" "$reset" "$lead" "$(bar "$pct")"
   fi
 }
 

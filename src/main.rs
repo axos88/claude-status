@@ -6,8 +6,9 @@
 // Each usage metric renders as:  icon  reset-countdown  progress-bar  pct%,
 // all sharing one threshold color (green <=75, yellow 76-90, red >90). The
 // countdown shows two units in the red zone (one unit below it), pulses
-// red<->dark-red at >=95%, and at >=100% the bar and % are dropped in favor of
-// a ⛔. When ANY limit is red (>90), the context bar collapses to just its %.
+// red<->dark-red at >=95%, and at >=100% the bar is dropped, leaving
+// "⛔ <pct>% <countdown>". When ANY limit is red (>90), the context bar
+// collapses to just its %.
 //
 // statusline.sh is kept in lockstep as an independent reference; tests/ diff the
 // two implementations cell-for-cell.
@@ -146,17 +147,27 @@ fn metric(label: &str, pct: i64, resets_at: i64, now: i64) -> String {
         } else {
             fmt_top(secs)
         };
-        format!("{cd_color}{txt}{RESET} ")
+        format!("{cd_color}{txt}{RESET}")
     } else {
         String::new()
     };
 
     if pct >= 100 {
-        // over the limit: the countdown replaces the bar, flagged with ⛔
-        format!("{DIM}{label}{RESET} {cd}⛔")
+        // over the limit: no bar — ⛔ flag, percentage, then the countdown
+        let tail = if cd.is_empty() {
+            String::new()
+        } else {
+            format!(" {cd}")
+        };
+        format!("{DIM}{label}{RESET} ⛔ {color}{pct}%{RESET}{tail}")
     } else {
         // countdown sits between the icon and the bar, sharing its color
-        format!("{DIM}{label}{RESET} {cd}{}", bar(pct))
+        let lead = if cd.is_empty() {
+            String::new()
+        } else {
+            format!("{cd} ")
+        };
+        format!("{DIM}{label}{RESET} {lead}{}", bar(pct))
     }
 }
 

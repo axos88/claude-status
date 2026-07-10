@@ -23,7 +23,7 @@ both how full a limit is and how long until it clears:
 | 76–90% | 🟡 yellow | 1 unit (`4d`) | – | ✓ |
 | 91–94% | 🔴 red | 2 units (`4d 15h`) | – | ✓ |
 | 95–99% | 🔴 red | 2 units | ⚡ pulses red↔dark-red | ✓ |
-| ≥ 100% | 🔴 red | 2 units | ⚡ | — replaced by ⛔ |
+| ≥ 100% | 🔴 red | 2 units | ⚡ | dropped → `⛔ 100% 4d 15h` |
 
 When any limit is red (> 90%), the 🧠 context bar collapses to just its
 percentage to save room.
