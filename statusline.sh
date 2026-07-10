@@ -65,6 +65,18 @@ bar() {
 
 now=$(date +%s)
 
+# time left, single most-significant unit: "5d" / "2h" / "50m" / "9s"
+fmt_top() {
+  local s=$1
+  (( s < 0 )) && s=0
+  local d=$(( s/86400 )) h=$(( (s%86400)/3600 )) m=$(( (s%3600)/60 )) sec=$(( s%60 ))
+  if   (( d > 0 )); then printf '%dd' "$d"
+  elif (( h > 0 )); then printf '%dh' "$h"
+  elif (( m > 0 )); then printf '%dm' "$m"
+  else                   printf '%ds' "$sec"
+  fi
+}
+
 # time left, two most-significant units: "5d 2h" / "2h 1m" / "50m 13s" / "9s"
 fmt_left() {
   local s=$1
@@ -101,7 +113,11 @@ metric() {
     [ -n "$cd" ] && tail=" ${blink}${cd}${reset}"
     printf '%s%s%s %s%d%%%s%s' "$dim" "$label" "$reset" "$yel" "$pct" "$reset" "$tail"
   else
-    printf '%s%s%s %s' "$dim" "$label" "$reset" "$(bar "$pct")"
+    # normal mode: bar + always-on reset countdown at its single
+    # highest-magnitude unit (dim, since it's ancillary here)
+    local tail=""
+    (( resets_at > 0 )) && tail=" ${dim}$(fmt_top $(( resets_at - now )))${reset}"
+    printf '%s%s%s %s%s' "$dim" "$label" "$reset" "$(bar "$pct")" "$tail"
   fi
 }
 

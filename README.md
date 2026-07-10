@@ -11,10 +11,13 @@ reads that JSON and prints a single line:
 ```
 
 - 🤖 model family · 📁 current folder · 🧠 context window · ⏳ 5-hour limit · 📅 7-day limit
-- Each usage metric is a colored progress bar (green < 60%, yellow < 85%, red ≥ 85%).
+- Each usage metric is a colored progress bar (green < 60%, yellow < 85%, red ≥ 85%),
+  followed by the time until that limit resets, shown as its single
+  highest-magnitude unit (e.g. `4d`, `2h`, `50m`).
 - When a rate limit is **near** (90–99%) its bar is replaced by a live, pulsing
-  countdown to reset; at **100%** it shows ⛔ plus the countdown and reset clock.
-  When any limit is near, the context bar collapses to just its percentage.
+  countdown to reset shown to two units (e.g. `1h 56m`); at **100%** it shows ⛔
+  plus that two-unit countdown and the reset clock. When any limit is near, the
+  context bar collapses to just its percentage.
 
 It's a port of the original `statusline.sh` (kept in this repo as the
 differential-test reference). At ~1 ms per invocation it's roughly 20–40× faster

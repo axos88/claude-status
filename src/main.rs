@@ -83,6 +83,26 @@ fn bar(pct: i64) -> String {
     format!("{RESET}[{cells}{RESET}] {color}{pct:3}%{RESET}")
 }
 
+/// time left, single most-significant unit: "5d" / "2h" / "50m" / "9s"
+fn fmt_top(mut s: i64) -> String {
+    if s < 0 {
+        s = 0;
+    }
+    let d = s / 86400;
+    let h = (s % 86400) / 3600;
+    let m = (s % 3600) / 60;
+    let sec = s % 60;
+    if d > 0 {
+        format!("{d}d")
+    } else if h > 0 {
+        format!("{h}h")
+    } else if m > 0 {
+        format!("{m}m")
+    } else {
+        format!("{sec}s")
+    }
+}
+
 /// time left, two most-significant units: "5d 2h" / "2h 1m" / "50m 13s" / "9s"
 fn fmt_left(mut s: i64) -> String {
     if s < 0 {
@@ -139,7 +159,13 @@ fn metric(label: &str, pct: i64, resets_at: i64, now: i64) -> String {
         }
         format!("{DIM}{label}{RESET} {YEL}{pct}%{RESET}{tail}")
     } else {
-        format!("{DIM}{label}{RESET} {}", bar(pct))
+        // normal mode: bar + always-on reset countdown at its single
+        // highest-magnitude unit (dim, since it's ancillary here)
+        let mut s = format!("{DIM}{label}{RESET} {}", bar(pct));
+        if resets_at > 0 {
+            s.push_str(&format!(" {DIM}{}{RESET}", fmt_top(resets_at - now)));
+        }
+        s
     }
 }
 
