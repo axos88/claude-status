@@ -33,18 +33,51 @@ as an independent differential-test reference. At ~1 ms per invocation the Rust
 binary is roughly 20–40× faster than the bash + `jq` original, and depends on no
 external binaries at runtime.
 
-## Build & install
+## Install
+
+> Replace `<owner>/claude-status` below with the actual repository slug.
+
+### Download a prebuilt binary (no Rust toolchain needed)
+
+Every tagged release ships a prebuilt binary per platform on the
+[Releases page](https://github.com/<owner>/claude-status/releases/latest),
+each with a `.sha256` checksum. Pick the archive for your OS/CPU:
+
+| OS | CPU | Archive |
+|----|-----|---------|
+| Linux | x86_64 | `claude-status-x86_64-unknown-linux-gnu.tar.gz` (or `-musl` for a fully static build) |
+| Linux | ARM64 | `claude-status-aarch64-unknown-linux-gnu.tar.gz` (or `-musl`) |
+| macOS | Apple Silicon | `claude-status-aarch64-apple-darwin.tar.gz` |
+| macOS | Intel | `claude-status-x86_64-apple-darwin.tar.gz` |
+| Windows | x86_64 | `claude-status-x86_64-pc-windows-msvc.zip` |
+
+Linux x86_64, for example — download, verify, extract to `~/.local/bin`:
+
+```sh
+base=https://github.com/<owner>/claude-status/releases/latest/download
+curl -LO $base/claude-status-x86_64-unknown-linux-gnu.tar.gz
+curl -LO $base/claude-status-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum -c claude-status-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf claude-status-x86_64-unknown-linux-gnu.tar.gz -C ~/.local/bin claude-status
+```
+
+(On macOS, `shasum -a 256 -c` instead of `sha256sum -c`. On Windows, unzip and
+place `claude-status.exe` somewhere on your `PATH`.)
+
+### Build from source
 
 ```sh
 cargo install --path .        # installs to ~/.cargo/bin/claude-status
 ```
 
-Then point Claude Code at it in `~/.claude/settings.json`:
+### Point Claude Code at it
+
+In `~/.claude/settings.json`, set the `command` to wherever you put the binary:
 
 ```json
 "statusLine": {
   "type": "command",
-  "command": "/home/you/.cargo/bin/claude-status",
+  "command": "/home/you/.local/bin/claude-status",
   "refreshInterval": 1
 }
 ```
@@ -64,3 +97,19 @@ color is actually verified; only the flashing fixtures (≥ 95%) strip ANSI, sin
 their per-second pulse is time-dependent. Malformed input is checked separately:
 the Rust port degrades to documented defaults rather than the shell's `""`→`0`
 coercion.
+
+## Releases
+
+Pushing a version tag builds and publishes the binaries via
+[`.github/workflows/release.yml`](.github/workflows/release.yml):
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+The [release profile](Cargo.toml) is tuned for a small binary — `opt-level="z"`,
+fat LTO, a single codegen unit, and `panic="abort"` — but deliberately keeps the
+symbol table (`strip="debuginfo"`) so **panic backtraces still resolve to
+function names**. Full DWARF is dropped, which shrinks the Linux x86_64 binary
+from ~2 MB to ~410 KB; a panic still prints its exact source location plus a
+symbolicated stack (set `RUST_BACKTRACE=1`).

@@ -1,0 +1,65 @@
+name: release
+
+# Cut a release by pushing a version tag:
+#   git tag v0.1.0 && git push origin v0.1.0
+# This creates a GitHub Release and attaches a prebuilt binary (with a sha256
+# checksum) for each target below, so users can run claude-status without a
+# Rust toolchain.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.*"
+
+permissions:
+  contents: write # create the release and upload assets
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/create-gh-release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  upload-assets:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64 — glibc (most common) and a fully static musl build
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          # Linux ARM64 — servers, Raspberry Pi, etc.
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+          # macOS — Apple Silicon and Intel
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          # Windows x86_64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # Builds with the release profile (see Cargo.toml — size-optimized but
+      # NOT stripping the symbol table, so panic backtraces stay readable),
+      # auto-using `cross` for the Linux cross targets, then archives the binary
+      # (.tar.gz on unix, .zip on windows) and uploads it to the release.
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: claude-status
+          target: ${{ matrix.target }}
+          checksum: sha256
+          token: ${{ secrets.GITHUB_TOKEN }}

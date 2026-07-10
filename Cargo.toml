@@ -13,7 +13,15 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [profile.release]
-opt-level = "s"
-lto = true
-strip = true
-panic = "abort"
+opt-level = "z"           # optimize aggressively for size
+lto = true               # fat cross-crate link-time optimization
+codegen-units = 1        # single codegen unit: better optimization, smaller
+panic = "abort"          # drop unwinding tables (size win). The panic hook still
+                         # prints message + backtrace before aborting; the only
+                         # behavioral change is no unwinding / no catch_unwind,
+                         # which this CLI never needs.
+strip = "debuginfo"      # drop DWARF (~1.6 MB) but KEEP the symbol table, so
+                         # panic backtraces still resolve to function names.
+                         # Full strip would blank the backtrace; full debug info
+                         # would ~5x the size just to add file:line (the panic
+                         # location is printed regardless).
