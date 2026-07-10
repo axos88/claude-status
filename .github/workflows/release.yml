@@ -3,12 +3,12 @@ name: release
 # Every push to `main` refreshes a single rolling "latest" GitHub Release,
 # rebuilding and re-attaching a prebuilt binary (+ sha256 checksum) for each
 # target below. Users can then download from:
-#   https://github.com/<owner>/claude-status/releases/latest/download/<asset>
+#   https://github.com/axos88/claude-status/releases/latest/download/<asset>
 # without needing a Rust toolchain.
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   workflow_dispatch: # allow manual re-runs from the Actions tab
 
 permissions:

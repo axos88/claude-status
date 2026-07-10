@@ -33,8 +33,6 @@ rewrite is roughly 20–40× faster, and depends on no external binaries at runt
 
 ## Install
 
-> Replace `<owner>/claude-status` below with the actual repository slug.
-
 ### Download a prebuilt binary (no Rust toolchain needed)
 
 The `latest` release always carries a prebuilt binary per platform (each with a
@@ -44,27 +42,27 @@ your `PATH`):
 
 **Linux — x86_64**
 ```sh
-mkdir -p ~/.local/bin && curl -fsSL https://github.com/<owner>/claude-status/releases/latest/download/claude-status-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.local/bin claude-status
+mkdir -p ~/.local/bin && curl -fsSL https://github.com/axos88/claude-status/releases/latest/download/claude-status-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.local/bin claude-status
 ```
 
 **Linux — ARM64**
 ```sh
-mkdir -p ~/.local/bin && curl -fsSL https://github.com/<owner>/claude-status/releases/latest/download/claude-status-aarch64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.local/bin claude-status
+mkdir -p ~/.local/bin && curl -fsSL https://github.com/axos88/claude-status/releases/latest/download/claude-status-aarch64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.local/bin claude-status
 ```
 
 **macOS — Apple Silicon**
 ```sh
-mkdir -p ~/.local/bin && curl -fsSL https://github.com/<owner>/claude-status/releases/latest/download/claude-status-aarch64-apple-darwin.tar.gz | tar -xz -C ~/.local/bin claude-status
+mkdir -p ~/.local/bin && curl -fsSL https://github.com/axos88/claude-status/releases/latest/download/claude-status-aarch64-apple-darwin.tar.gz | tar -xz -C ~/.local/bin claude-status
 ```
 
 **macOS — Intel**
 ```sh
-mkdir -p ~/.local/bin && curl -fsSL https://github.com/<owner>/claude-status/releases/latest/download/claude-status-x86_64-apple-darwin.tar.gz | tar -xz -C ~/.local/bin claude-status
+mkdir -p ~/.local/bin && curl -fsSL https://github.com/axos88/claude-status/releases/latest/download/claude-status-x86_64-apple-darwin.tar.gz | tar -xz -C ~/.local/bin claude-status
 ```
 
 **Windows — x86_64** (PowerShell)
 ```powershell
-irm https://github.com/<owner>/claude-status/releases/latest/download/claude-status-x86_64-pc-windows-msvc.zip -OutFile claude-status.zip; Expand-Archive -Force claude-status.zip .
+irm https://github.com/axos88/claude-status/releases/latest/download/claude-status-x86_64-pc-windows-msvc.zip -OutFile claude-status.zip; Expand-Archive -Force claude-status.zip .
 ```
 
 On Linux, swap `-gnu` for `-musl` in the URL to get a fully static binary that
@@ -103,7 +101,7 @@ cwd fallback, and malformed input degrading to defaults.
 
 ## Releases
 
-Every push to `main` runs [`.github/workflows/release.yml`](.github/workflows/release.yml),
+Every push to `main`/`master` runs [`.github/workflows/release.yml`](.github/workflows/release.yml),
 which rebuilds all targets and refreshes a single rolling **`latest`** GitHub
 Release with the fresh binaries (and their `sha256` checksums) — so the download
 commands above always fetch the newest build. No manual tagging needed.
