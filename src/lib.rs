@@ -1,7 +1,7 @@
 // Claude Code status line renderer.
 //
 // `render` turns the status-line JSON into a single line:
-//   🤖 <family>  📁 <folder>  🧠 <ctx>  ⏳ <5h>  📅 <7d>
+//   🤖 <family> <@config>  📁 <folder>  🧠 <ctx>  ⏳ <5h>  📅 <7d>
 //
 // Each usage metric renders as:  icon  reset-countdown  progress-bar  pct%,
 // all sharing one threshold color (green <=75, yellow 76-90, red >90). The
@@ -183,6 +183,26 @@ fn model_family(name: &str) -> String {
     }
 }
 
+/// Which config directory Claude Code runs from: `~/.claude` -> "@lvgl",
+/// `~/.claude-akos` -> "@akos", `~/.claude-herta` -> "@herta", anything else
+/// -> "@other". `path` is either
+/// CLAUDE_CONFIG_DIR or the transcript path — both spell the directory out, so
+/// one test serves both.
+fn config_tag(path: &str) -> &'static str {
+    // a trailing slash so a bare "…/.claude" matches too
+    let path = format!("{}/", path.trim_end_matches('/'));
+    // the longer names first — ".claude-akos" also contains ".claude"
+    if path.contains("/.claude-akos/") {
+        "@akos"
+    } else if path.contains("/.claude-herta/") {
+        "@herta"
+    } else if path.contains("/.claude/") {
+        "@lvgl"
+    } else {
+        "@other"
+    }
+}
+
 fn folder_of(cwd: &str) -> String {
     std::path::Path::new(cwd)
         .file_name()
@@ -191,9 +211,16 @@ fn folder_of(cwd: &str) -> String {
         .unwrap_or_else(|| cwd.to_owned())
 }
 
-/// Render the full status line from the status JSON and the current unix time.
-pub fn render(v: &Value, now: i64) -> String {
+/// Render the full status line from the status JSON, the current unix time and
+/// CLAUDE_CONFIG_DIR (`None` when it is unset).
+pub fn render(v: &Value, now: i64, config_dir: Option<&str>) -> String {
     let model = model_family(&text(v, &["model", "display_name"], "?"));
+    // the env var is authoritative; the transcript path (it lives in
+    // <config dir>/projects/) covers the case where it doesn't reach us
+    let tag = match config_dir.filter(|d| !d.is_empty()) {
+        Some(d) => config_tag(d),
+        None => config_tag(&text(v, &["transcript_path"], "")),
+    };
 
     // .workspace.current_dir // .cwd // "?"
     let cwd = {
@@ -217,7 +244,8 @@ pub fn render(v: &Value, now: i64) -> String {
     let seven = num(v, &["rate_limits", "seven_day", "used_percentage"], -1.0) as i64;
     let seven_reset = num(v, &["rate_limits", "seven_day", "resets_at"], 0.0) as i64;
 
-    let mut out = format!("{BOLD}{MAG}🤖 {model}{RESET}{SEP}{CYAN}📁 {folder}{RESET}{SEP}");
+    let mut out =
+        format!("{BOLD}{MAG}🤖 {model}{RESET} {DIM}{tag}{RESET}{SEP}{CYAN}📁 {folder}{RESET}{SEP}");
 
     // context: bar normally, but only the % if any limit is in the red zone
     if five > 90 || seven > 90 {
@@ -295,16 +323,16 @@ mod tests {
 
     #[test]
     fn full_line_green_zone() {
-        let s = strip(&render(&with_five(30, FAR), NOW));
+        let s = strip(&render(&with_five(30, FAR), NOW, None));
         assert_eq!(
             s,
-            "🤖 Opus  📁 ?  🧠 [████░░░░░░]  40%  ⏳ 4d [███░░░░░░░]  30%"
+            "🤖 Opus @other  📁 ?  🧠 [████░░░░░░]  40%  ⏳ 4d [███░░░░░░░]  30%"
         );
     }
 
     #[test]
     fn green_countdown_is_one_unit_and_green() {
-        let out = render(&with_five(30, FAR), NOW);
+        let out = render(&with_five(30, FAR), NOW, None);
         assert!(strip(&out).contains("⏳ 4d [")); // one unit, then the bar
         assert!(out.contains(&format!("{GRN}4d{RESET}"))); // colored to match
     }
@@ -312,7 +340,7 @@ mod tests {
     #[test]
     fn yellow_zone_76_to_90() {
         for pct in [76, 80, 90] {
-            let out = render(&with_five(pct, FAR), NOW);
+            let out = render(&with_five(pct, FAR), NOW, None);
             assert!(strip(&out).contains("⏳ 4d [")); // still one unit
             assert!(out.contains(&format!("{YEL}4d{RESET}")));
         }
@@ -320,7 +348,7 @@ mod tests {
 
     #[test]
     fn red_zone_switches_to_two_units_and_stays_static_below_95() {
-        let out = render(&with_five(92, FAR), NOW);
+        let out = render(&with_five(92, FAR), NOW, None);
         assert!(strip(&out).contains("⏳ 4d 15h [")); // two units, bar present
         assert!(out.contains(&format!("{RED}4d 15h{RESET}")));
         assert!(!out.contains(DRED)); // 92 < 95 -> not flashing
@@ -329,20 +357,20 @@ mod tests {
     #[test]
     fn flashing_at_95_pulses_on_odd_seconds() {
         // bar is still present in the 95–99 band
-        assert!(strip(&render(&with_five(95, FAR), NOW)).contains("⏳ 4d 15h ["));
+        assert!(strip(&render(&with_five(95, FAR), NOW, None)).contains("⏳ 4d 15h ["));
         // even second -> bright red, no dark-red anywhere
-        assert!(!render(&with_five(95, FAR), NOW).contains(DRED));
+        assert!(!render(&with_five(95, FAR), NOW, None).contains(DRED));
         // odd second -> countdown pulses to dark red
-        assert!(render(&with_five(95, FAR), NOW + 1).contains(DRED));
+        assert!(render(&with_five(95, FAR), NOW + 1, None).contains(DRED));
     }
 
     #[test]
     fn over_limit_drops_bar_shows_flag_and_percent() {
-        let s = strip(&render(&with_five(100, FAR), NOW));
+        let s = strip(&render(&with_five(100, FAR), NOW, None));
         assert!(s.contains("⏳ ⛔ 100% 4d 15h")); // ⛔, %, then countdown
         assert!(!s.contains('[')); // no bar anywhere (ctx also collapses)
         // and >135% keeps rendering the real percentage
-        assert!(strip(&render(&with_five(135, FAR), NOW)).contains("⛔ 135%"));
+        assert!(strip(&render(&with_five(135, FAR), NOW, None)).contains("⛔ 135%"));
     }
 
     #[test]
@@ -352,7 +380,7 @@ mod tests {
             "context_window": {"used_percentage": 96},
             "rate_limits": {"five_hour": {"used_percentage": 92, "resets_at": FAR}}
         });
-        let s = strip(&render(&v, NOW));
+        let s = strip(&render(&v, NOW, None));
         assert!(s.contains("🧠 96%")); // raw percentage, no bar
         assert!(!s.contains("🧠 [")); // bar collapsed away
     }
@@ -360,7 +388,7 @@ mod tests {
     #[test]
     fn context_keeps_bar_at_exactly_90() {
         // 90 is yellow, not red -> no collapse
-        let s = strip(&render(&with_five(90, FAR), NOW));
+        let s = strip(&render(&with_five(90, FAR), NOW, None));
         assert!(s.contains("🧠 [████░░░░░░]  40%"));
     }
 
@@ -372,14 +400,14 @@ mod tests {
             "context_window": {"used_percentage": 33},
             "rate_limits": {"seven_day": {"used_percentage": 50, "resets_at": FAR}}
         });
-        let s = strip(&render(&v, NOW));
+        let s = strip(&render(&v, NOW, None));
         assert!(s.contains("📅 4d ["));
         assert!(!s.contains('⏳')); // five_hour absent -> omitted
     }
 
     #[test]
     fn no_reset_means_no_countdown() {
-        let s = strip(&render(&with_five(20, 0), NOW));
+        let s = strip(&render(&with_five(20, 0), NOW, None));
         assert!(s.contains("⏳ [")); // bar immediately after icon, no countdown
     }
 
@@ -387,18 +415,42 @@ mod tests {
     fn model_family_and_cwd_fallback() {
         assert!(strip(&render(
             &json!({"model": {"display_name": "Haiku 4.5"}}),
-            NOW
+            NOW,
+            None
         ))
         .contains("🤖 Haiku"));
         // top-level cwd fallback + basename
-        let s = strip(&render(&json!({"cwd": "/var/log/app"}), NOW));
+        let s = strip(&render(&json!({"cwd": "/var/log/app"}), NOW, None));
         assert!(s.contains("📁 app"));
+    }
+
+    #[test]
+    fn config_dir_tag() {
+        assert_eq!(config_tag("/home/me/.claude/projects/x/s.jsonl"), "@lvgl");
+        assert_eq!(
+            config_tag("/home/me/.claude-akos/projects/x/s.jsonl"),
+            "@akos"
+        );
+        assert_eq!(
+            config_tag("/home/me/.claude-herta/projects/x/s.jsonl"),
+            "@herta"
+        );
+        assert_eq!(config_tag("/opt/cfg/projects/x/s.jsonl"), "@other");
+        assert_eq!(config_tag(""), "@other"); // field missing
+        assert_eq!(config_tag("/home/me/.claude-akos/"), "@akos"); // env var form
+        assert_eq!(config_tag("/home/me/.claude-herta/"), "@herta");
+        assert_eq!(config_tag("/home/me/.claude"), "@lvgl"); // no trailing slash
+        let v = json!({"transcript_path": "/home/me/.claude-akos/projects/x/s.jsonl"});
+        assert!(strip(&render(&v, NOW, None)).starts_with("🤖 ? @akos "));
+        // the env var wins over the transcript path
+        let s = strip(&render(&v, NOW, Some("/home/me/.claude")));
+        assert!(s.starts_with("🤖 ? @lvgl "));
     }
 
     #[test]
     fn malformed_input_degrades_to_defaults() {
         // Value::Null is what main() falls back to on unparseable stdin
-        let s = strip(&render(&Value::Null, NOW));
-        assert_eq!(s, "🤖 ?  📁 ?  🧠 [░░░░░░░░░░]   0%");
+        let s = strip(&render(&Value::Null, NOW, None));
+        assert_eq!(s, "🤖 ? @other  📁 ?  🧠 [░░░░░░░░░░]   0%");
     }
 }

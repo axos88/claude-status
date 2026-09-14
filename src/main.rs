@@ -19,5 +19,9 @@ fn main() {
     // so every field takes its default.
     let v: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
 
-    print!("{}", claude_status::render(&v, now));
+    // which config dir this session runs from — Claude Code sets it only for a
+    // non-default one, so "unset" is a valid answer, not an error
+    let config_dir = std::env::var("CLAUDE_CONFIG_DIR").ok();
+
+    print!("{}", claude_status::render(&v, now, config_dir.as_deref()));
 }
