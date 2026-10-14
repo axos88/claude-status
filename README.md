@@ -79,8 +79,15 @@ running at the time pick it up on their next refresh.
 
 It keeps its state in `$XDG_STATE_HOME/claude-status` (`~/.local/state/…`;
 `%LOCALAPPDATA%\claude-status` on Windows): `last-check` (its age says when the
-next update is due), `installed.sha256`, and `update.log`, the last outcome. To
-update right away, run `claude-status --update`.
+next update is due), `installed.sha256`, and `update.log`, the last outcome.
+
+To update right away, either run `claude-status --update`, or delete
+`last-check`: the next refresh of any running status line finds the update due
+and starts it, as it would on its own (unless the interval below is `0`).
+Neither needs Claude Code restarted — it runs the binary afresh on every
+refresh, so the new one draws the status line from the next refresh on.
+(Deleting `installed.sha256` as well forces a reinstall even when the release
+hasn't changed.)
 
 Only the release builds do this (the workflow compiles them with
 `CLAUDE_STATUS_RELEASE` set), so a binary built from source is never overwritten
