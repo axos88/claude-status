@@ -4,28 +4,38 @@ A fast status-line renderer for [Claude Code](https://claude.ai/code), written i
 
 Claude Code invokes the `statusLine.command` on every refresh, piping the
 status JSON to **stdin** and using **stdout** as the status line. This binary
-reads that JSON and prints two lines, its bars stretched to the terminal's width:
+reads that JSON and prints a line, its bars stretched to the terminal's width:
 
 ```
-🤖 Opus  📁 claude-status  👤 akos  🧠 [▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆]  63%
-⏳ 4d [▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆]  45%  📅 2h [▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆]  72%
+🤖 Opus  📁 claude-status  👤 akos  🧠 [▆▆▆▆▆▆▆▆▆▆]  63%  ⏳ 4d [▆▆▆▆▆▆▆▆▆]  45%  📅 2h [▆▆▆▆▆▆▆▆▆]  72%
+```
+
+When the terminal is too narrow for that, it drops the model; when it is
+narrower still, it wraps onto two lines:
+
+```
+🤖 Opus  📁 claude-status  👤 akos  🧠 [▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆]  63%
+⏳ 4d [▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆]  45%  📅 2h [▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆]  72%
 ```
 
 ![The claude-status status bar shown at three usage levels — comfortable, tightening, and over the limit](docs/screenshot.png)
 
 <sub>The same status bar at three usage levels: comfortable, tightening, and over the 5-hour limit.</sub>
 
-- 🤖 model family · 📁 current folder · 👤 account · 🧠 context window, then on
-  the second line ⏳ 5-hour limit · 📅 7-day limit (omitted when Claude Code
-  reports no rate limits, e.g. on an API key)
+- 🤖 model family · 📁 current folder · 👤 account · 🧠 context window ·
+  ⏳ 5-hour limit · 📅 7-day limit (the limits omitted when Claude Code reports
+  none, e.g. on an API key)
+- One line as long as every bar gets at least 7 cells on it; else one line
+  without the model, if that gives them 7; else two lines, the limits on the
+  second.
 - Each usage metric renders as **icon · reset-countdown · progress-bar · %**, and
   everything in it shares one threshold color driven by the percentage. A bar's
   filled part is in that color, its empty part grey; the cells are ¾ high (`▆`),
-  so the bars of the two lines don't touch.
+  so the bars of two lines don't touch.
 - The bars fill the terminal width (Claude Code passes it in `COLUMNS`): the bars
   of a line share the columns its text leaves free, less 5 at the right edge,
   where Claude Code cuts the status line short with a `…`. Without a width, they
-  are 10 cells.
+  are 10 cells, on one line.
 
 The reset countdown and its styling escalate with usage, so a glance tells you
 both how full a limit is and how long until it clears:

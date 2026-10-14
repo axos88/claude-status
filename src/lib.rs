@@ -1,9 +1,12 @@
 // Claude Code status line renderer.
 //
-// `render` turns the status-line JSON into two lines:
+// `render` turns the status-line JSON into one line:
+//   🤖 <family>  📁 <folder>  👤 <account>  🧠 <ctx>  ⏳ <5h>  📅 <7d>
+// the limits only when Claude Code reports them. Where that leaves a bar under
+// ONE_LINE_BAR cells, the model goes; where that doesn't help either, the
+// limits move to a second line:
 //   🤖 <family>  📁 <folder>  👤 <account>  🧠 <ctx>
 //   ⏳ <5h>  📅 <7d>
-// (the second only when Claude Code reports rate limits).
 //
 // Each usage metric renders as:  icon  reset-countdown  progress-bar  pct%,
 // all sharing one threshold color (green <=75, yellow 76-90, red >90). The
@@ -12,7 +15,7 @@
 // "⛔ <pct>% <countdown>".
 //
 // The bars stretch to fill the terminal width: the bars of a line share the
-// columns its text leaves free. Without a width they are 10 cells.
+// columns its text leaves free. Without a width they are 10 cells, on one line.
 //
 // `render` is pure over (JSON, now, account, width) so the tests at the bottom
 // exercise every branch deterministically with a fixed clock.
@@ -47,6 +50,8 @@ const CELL: char = '▆';
 const BAR_WIDTH: usize = 10;
 /// Narrowest a stretched bar gets, however little room is left.
 const MIN_BAR: usize = 5;
+/// The status fits on one line when each of its bars gets this many cells.
+const ONE_LINE_BAR: usize = 7;
 /// Columns left free at the right edge: Claude Code cuts the status line short
 /// of the terminal width (with a "…"); at 97 columns, 92 fit.
 const MARGIN: usize = 5;
@@ -88,6 +93,7 @@ fn color_for(pct: i64) -> &'static str {
 }
 
 /// A piece of a line: text, or a bar whose width is decided per line by `layout`.
+#[derive(Clone)]
 enum Seg {
     Text(String),
     /// the percentage it is filled to
@@ -132,11 +138,10 @@ fn pct_label(pct: i64) -> String {
     format!(" {}{pct:3}%{RESET}", color_for(pct))
 }
 
-/// Join a line's segments, sizing its bars to share the columns the text leaves
-/// free (keeping MARGIN) — or BAR_WIDTH each when `columns` is unknown.
-fn layout(line: &[Seg], columns: Option<usize>) -> String {
+/// The columns a line's bars share: those its text (and the bars' brackets)
+/// leave free of `columns`, keeping MARGIN; and the number of bars.
+fn bar_space(line: &[Seg], columns: usize) -> (usize, usize) {
     let bars = line.iter().filter(|s| matches!(s, Seg::Bar(_))).count();
-    // text, plus each bar's brackets
     let fixed: usize = line
         .iter()
         .map(|s| match s {
@@ -144,7 +149,19 @@ fn layout(line: &[Seg], columns: Option<usize>) -> String {
             Seg::Bar(_) => 2,
         })
         .sum();
-    let free = columns.map(|c| c.saturating_sub(fixed + MARGIN));
+    (columns.saturating_sub(fixed + MARGIN), bars)
+}
+
+/// Whether every bar of `line` gets ONE_LINE_BAR cells in `columns`.
+fn roomy(line: &[Seg], columns: usize) -> bool {
+    let (free, bars) = bar_space(line, columns);
+    free / bars.max(1) >= ONE_LINE_BAR
+}
+
+/// Join a line's segments, sizing its bars to share the columns the text leaves
+/// free (keeping MARGIN) — or BAR_WIDTH each when `columns` is unknown.
+fn layout(line: &[Seg], columns: Option<usize>) -> String {
+    let space = columns.map(|c| bar_space(line, c));
 
     let mut out = String::new();
     let mut i = 0;
@@ -152,9 +169,9 @@ fn layout(line: &[Seg], columns: Option<usize>) -> String {
         match seg {
             Seg::Text(t) => out.push_str(t),
             Seg::Bar(pct) => {
-                let width = match free {
+                let width = match space {
                     // spread evenly, the first bars taking the remainder
-                    Some(free) => (free / bars + usize::from(i < free % bars)).max(MIN_BAR),
+                    Some((free, bars)) => (free / bars + usize::from(i < free % bars)).max(MIN_BAR),
                     None => BAR_WIDTH,
                 };
                 out.push_str(&bar(*pct, width));
@@ -345,9 +362,10 @@ pub fn render(v: &Value, now: i64, account: &str, columns: Option<usize>) -> Str
     let seven = num(v, &["rate_limits", "seven_day", "used_percentage"], -1.0) as i64;
     let seven_reset = num(v, &["rate_limits", "seven_day", "resets_at"], 0.0) as i64;
 
-    let top = [
+    let model = Seg::Text(format!("{BOLD}{MAG}🤖 {model}{RESET}{SEP}"));
+    let context = [
         Seg::Text(format!(
-            "{BOLD}{MAG}🤖 {model}{RESET}{SEP}{CYAN}📁 {folder}{RESET}{SEP}{YEL}👤 {account}{RESET}{SEP}🧠 "
+            "{CYAN}📁 {folder}{RESET}{SEP}{YEL}👤 {account}{RESET}{SEP}🧠 "
         )),
         Seg::Bar(ctx),
         Seg::Text(pct_label(ctx)),
@@ -364,10 +382,34 @@ pub fn render(v: &Value, now: i64, account: &str, columns: Option<usize>) -> Str
         limits.extend(metric("📅", seven, seven_reset, now));
     }
 
-    let mut out = layout(&top, columns);
+    // the context, after the model if `with_model`, before the limits if `with_limits`
+    let line = |with_model: bool, with_limits: bool| {
+        let mut line = Vec::new();
+        if with_model {
+            line.push(model.clone());
+        }
+        line.extend(context.iter().cloned());
+        if with_limits && !limits.is_empty() {
+            line.push(Seg::Text(SEP.to_owned()));
+            line.extend(limits.iter().cloned());
+        }
+        line
+    };
+
+    let Some(columns) = columns else {
+        return layout(&line(true, true), None);
+    };
+    // one line if its bars get room enough — with the model, else without it
+    for with_model in [true, false] {
+        let one = line(with_model, true);
+        if roomy(&one, columns) {
+            return layout(&one, Some(columns));
+        }
+    }
+    let mut out = layout(&line(true, false), Some(columns));
     if !limits.is_empty() {
         out.push('\n');
-        out.push_str(&layout(&limits, columns));
+        out.push_str(&layout(&limits, Some(columns)));
     }
     out
 }
@@ -456,11 +498,39 @@ mod tests {
     }
 
     #[test]
-    fn full_lines_green_zone() {
+    fn full_line_green_zone() {
         assert_eq!(
             plain(&with_five(30, FAR), NOW),
-            "🤖 Opus  📁 ?  👤 akos  🧠 [▆▆▆▆▆▆▆▆▆▆]  40%\n⏳ 4d [▆▆▆▆▆▆▆▆▆▆]  30%"
+            "🤖 Opus  📁 ?  👤 akos  🧠 [▆▆▆▆▆▆▆▆▆▆]  40%  ⏳ 4d [▆▆▆▆▆▆▆▆▆▆]  30%"
         );
+    }
+
+    #[test]
+    fn wraps_only_when_needed() {
+        // with_both's text takes 76 cells on one line, 9 of them the model's
+        let at = |columns| strip(&render(&with_both(30, 55, 20), NOW, "akos", Some(columns)));
+
+        // 102 - 76 - MARGIN = 21: three bars of 7, model and all
+        let s = at(102);
+        assert_eq!(s.lines().count(), 1);
+        assert!(s.starts_with("🤖 Opus  📁 claude-status"));
+        assert_eq!(bar_widths(&s), [7, 7, 7]);
+
+        // one cell short: the model goes, the bars get its room
+        let s = at(101);
+        assert_eq!(s.lines().count(), 1);
+        assert!(s.starts_with("📁 claude-status"));
+        assert_eq!(bar_widths(&s), [10, 10, 9]);
+
+        // 93 - 67 - MARGIN = 21: still one line, without the model
+        let s = at(93);
+        assert_eq!(s.lines().count(), 1);
+        assert_eq!(bar_widths(&s), [7, 7, 7]);
+
+        // one cell short again: two lines, the model back
+        let s = at(92);
+        assert_eq!(s.lines().count(), 2);
+        assert!(s.starts_with("🤖 Opus  📁 claude-status"));
     }
 
     #[test]
@@ -496,13 +566,12 @@ mod tests {
 
     #[test]
     fn the_limits_share_their_line_evenly() {
-        let out = strip(&render(&with_both(30, 55, 20), NOW, "akos", Some(97)));
+        let out = strip(&render(&with_both(30, 55, 20), NOW, "akos", Some(92)));
         let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(bar_widths(lines[0]), [46]); // 92 - 46 cells of text
-                                                // 64 free cells, split between the two bars
-        assert_eq!(bar_widths(lines[1]), [32, 32]);
-        // filled to the percentage of each bar's own width
-        assert!(lines[1].contains(&format!("[{}", "▆".repeat(32))));
+        // 92 - MARGIN - 46 cells of text
+        assert_eq!(bar_widths(lines[0]), [41]);
+        // 59 free cells, split between the two bars, the first taking the odd one
+        assert_eq!(bar_widths(lines[1]), [30, 29]);
     }
 
     #[test]
@@ -550,9 +619,8 @@ mod tests {
     #[test]
     fn over_limit_drops_bar_shows_flag_and_percent() {
         let s = plain(&with_five(100, FAR), NOW);
-        let limits = s.lines().nth(1).unwrap();
-        assert_eq!(limits, "⏳ ⛔ 100% 4d 15h"); // ⛔, %, then countdown, no bar
-                                                 // and >135% keeps rendering the real percentage
+        assert!(s.ends_with("  ⏳ ⛔ 100% 4d 15h")); // ⛔, %, then countdown, no bar
+                                                     // and >135% keeps rendering the real percentage
         assert!(plain(&with_five(135, FAR), NOW).contains("⛔ 135%"));
     }
 
@@ -564,10 +632,9 @@ mod tests {
             "rate_limits": {"five_hour": {"used_percentage": 100, "resets_at": FAR}}
         });
         let out = strip(&render(&v, NOW, "akos", Some(60)));
-        let top = out.lines().next().unwrap();
-        assert!(top.contains("🧠 [▆")); // bar stays, there is room for it
-        assert!(top.ends_with("]  96%"));
-        assert_eq!(visible_width(top), 60 - MARGIN); // and still stretches
+        assert!(out.contains("🧠 [▆")); // bar stays, there is room for it
+        assert!(out.contains("]  96%"));
+        assert_eq!(visible_width(&out), 60 - MARGIN); // and still stretches
     }
 
     #[test]
@@ -579,7 +646,7 @@ mod tests {
             "rate_limits": {"seven_day": {"used_percentage": 50, "resets_at": FAR}}
         });
         let s = plain(&v, NOW);
-        assert!(s.lines().nth(1).unwrap().starts_with("📅 4d ["));
+        assert!(s.contains("  📅 4d ["));
         assert!(!s.contains('⏳')); // five_hour absent -> omitted
     }
 
