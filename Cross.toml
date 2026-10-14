@@ -1,0 +1,4 @@
+# The Linux cross targets build inside cross's container, which sees only the
+# environment variables passed through here.
+[build.env]
+passthrough = ["CLAUDE_STATUS_RELEASE"] # release builds update themselves daily (src/update.rs)

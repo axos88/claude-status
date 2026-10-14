@@ -1,19 +1,28 @@
 // Claude Code status line renderer.
 //
-// `render` turns the status-line JSON into a single line:
-//   🤖 <family> <@config>  📁 <folder>  🧠 <ctx>  ⏳ <5h>  📅 <7d>
+// `render` turns the status-line JSON into two lines:
+//   🤖 <family>  📁 <folder>  👤 <account>  🧠 <ctx>
+//   ⏳ <5h>  📅 <7d>
+// (the second only when Claude Code reports rate limits).
 //
 // Each usage metric renders as:  icon  reset-countdown  progress-bar  pct%,
 // all sharing one threshold color (green <=75, yellow 76-90, red >90). The
 // countdown shows two units in the red zone (one unit below it), pulses
 // red<->dark-red at >=95%, and at >=100% the bar is dropped, leaving
-// "⛔ <pct>% <countdown>". When ANY limit is red (>90), the context bar
-// collapses to just its %.
+// "⛔ <pct>% <countdown>".
 //
-// `render` is pure over (JSON, now) so the tests at the bottom exercise every
-// branch deterministically with a fixed clock.
+// The bars stretch to fill the terminal width: the bars of a line share the
+// columns its text leaves free. Without a width they are 10 cells.
+//
+// `render` is pure over (JSON, now, account, width) so the tests at the bottom
+// exercise every branch deterministically with a fixed clock.
+
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+use unicode_width::UnicodeWidthStr;
+
+pub mod update;
 
 // --- ANSI palette ------------------------------------------------------------
 const DIM: &str = "\x1b[2m";
@@ -26,8 +35,24 @@ const YEL: &str = "\x1b[33m";
 const GRN: &str = "\x1b[32m";
 // per-second countdown pulse: red <-> dark red, when >= 95%
 const DRED: &str = "\x1b[38;5;88m";
+// a bar's empty part
+const GREY: &str = "\x1b[90m";
 
 const SEP: &str = "  ";
+
+/// A bar cell, filled or empty (the color tells them apart): 3/4 high, so the
+/// bars of the two lines don't touch, as full blocks would.
+const CELL: char = '▆';
+/// Bar width when the terminal width is unknown.
+const BAR_WIDTH: usize = 10;
+/// Narrowest a stretched bar gets, however little room is left.
+const MIN_BAR: usize = 5;
+/// Columns left free at the right edge: Claude Code cuts the status line short
+/// of the terminal width (with a "…"); at 97 columns, 92 fit.
+const MARGIN: usize = 5;
+
+/// The file in a config dir that names its account (first line).
+pub const ACCOUNT_FILE: &str = "account-name";
 
 /// Walk a dotted path of object keys, returning the leaf value if present.
 fn dig<'a>(v: &'a Value, path: &[&str]) -> &'a Value {
@@ -62,21 +87,82 @@ fn color_for(pct: i64) -> &'static str {
     }
 }
 
-/// colored progress bar: `bar(42)` -> "[████░░░░░░]  42%"
-fn bar(pct: i64) -> String {
-    let width: i64 = 10;
-    let pct = pct.clamp(0, 100);
-    let color = color_for(pct);
+/// A piece of a line: text, or a bar whose width is decided per line by `layout`.
+enum Seg {
+    Text(String),
+    /// the percentage it is filled to
+    Bar(i64),
+}
+
+/// Terminal cells taken by `s`: ANSI escapes take none, emoji two.
+fn visible_width(s: &str) -> usize {
+    let mut plain = String::new();
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            for c2 in chars.by_ref() {
+                if c2 == 'm' {
+                    break;
+                }
+            }
+        } else {
+            plain.push(c);
+        }
+    }
+    plain.width()
+}
+
+/// colored progress bar `width` cells wide: `bar(42, 10)` -> "[▆▆▆▆▆▆▆▆▆▆]",
+/// the first 4 cells in the threshold color, the rest grey
+fn bar(pct: i64, width: usize) -> String {
+    let pct = pct.clamp(0, 100) as usize;
     let filled = (pct * width + 50) / 100; // integer rounding
-    let mut cells = String::from(color);
-    for _ in 0..filled {
-        cells.push('█');
+    let cells = |n: usize| CELL.to_string().repeat(n);
+    format!(
+        "{RESET}[{}{}{RESET}{GREY}{}{RESET}]",
+        color_for(pct as i64),
+        cells(filled),
+        cells(width - filled)
+    )
+}
+
+/// the percentage after a bar: " 42%", in the threshold color
+fn pct_label(pct: i64) -> String {
+    let pct = pct.clamp(0, 100);
+    format!(" {}{pct:3}%{RESET}", color_for(pct))
+}
+
+/// Join a line's segments, sizing its bars to share the columns the text leaves
+/// free (keeping MARGIN) — or BAR_WIDTH each when `columns` is unknown.
+fn layout(line: &[Seg], columns: Option<usize>) -> String {
+    let bars = line.iter().filter(|s| matches!(s, Seg::Bar(_))).count();
+    // text, plus each bar's brackets
+    let fixed: usize = line
+        .iter()
+        .map(|s| match s {
+            Seg::Text(t) => visible_width(t),
+            Seg::Bar(_) => 2,
+        })
+        .sum();
+    let free = columns.map(|c| c.saturating_sub(fixed + MARGIN));
+
+    let mut out = String::new();
+    let mut i = 0;
+    for seg in line {
+        match seg {
+            Seg::Text(t) => out.push_str(t),
+            Seg::Bar(pct) => {
+                let width = match free {
+                    // spread evenly, the first bars taking the remainder
+                    Some(free) => (free / bars + usize::from(i < free % bars)).max(MIN_BAR),
+                    None => BAR_WIDTH,
+                };
+                out.push_str(&bar(*pct, width));
+                i += 1;
+            }
+        }
     }
-    cells.push_str(DIM);
-    for _ in filled..width {
-        cells.push('░');
-    }
-    format!("{RESET}[{cells}{RESET}] {color}{pct:3}%{RESET}")
+    out
 }
 
 /// time left, single most-significant unit: "5d" / "2h" / "50m" / "9s"
@@ -122,7 +208,7 @@ fn fmt_left(mut s: i64) -> String {
 /// One usage metric. Color scales with `pct` (green/yellow/red); the reset
 /// countdown shows two units in the red zone and one unit below it, pulses
 /// red<->dark-red at >=95%, and at >=100% the bar/% give way to a ⛔.
-fn metric(label: &str, pct: i64, resets_at: i64, now: i64) -> String {
+fn metric(label: &str, pct: i64, resets_at: i64, now: i64) -> Vec<Seg> {
     let color = color_for(pct);
     // countdown color: pulse red<->dark-red each second once near the ceiling,
     // so motion is perceived even when the displayed digits don't change
@@ -155,7 +241,9 @@ fn metric(label: &str, pct: i64, resets_at: i64, now: i64) -> String {
         } else {
             format!(" {cd}")
         };
-        format!("{DIM}{label}{RESET} ⛔ {color}{pct}%{RESET}{tail}")
+        vec![Seg::Text(format!(
+            "{DIM}{label}{RESET} ⛔ {color}{pct}%{RESET}{tail}"
+        ))]
     } else {
         // countdown sits between the icon and the bar, sharing its color
         let lead = if cd.is_empty() {
@@ -163,7 +251,11 @@ fn metric(label: &str, pct: i64, resets_at: i64, now: i64) -> String {
         } else {
             format!("{cd} ")
         };
-        format!("{DIM}{label}{RESET} {lead}{}", bar(pct))
+        vec![
+            Seg::Text(format!("{DIM}{label}{RESET} {lead}")),
+            Seg::Bar(pct),
+            Seg::Text(pct_label(pct)),
+        ]
     }
 }
 
@@ -183,23 +275,38 @@ fn model_family(name: &str) -> String {
     }
 }
 
-/// Which config directory Claude Code runs from: `~/.claude` -> "@lvgl",
-/// `~/.claude-akos` -> "@akos", `~/.claude-herta` -> "@herta", anything else
-/// -> "@other". `path` is either
-/// CLAUDE_CONFIG_DIR or the transcript path — both spell the directory out, so
-/// one test serves both.
-fn config_tag(path: &str) -> &'static str {
-    // a trailing slash so a bare "…/.claude" matches too
-    let path = format!("{}/", path.trim_end_matches('/'));
-    // the longer names first — ".claude-akos" also contains ".claude"
-    if path.contains("/.claude-akos/") {
-        "@akos"
-    } else if path.contains("/.claude-herta/") {
-        "@herta"
-    } else if path.contains("/.claude/") {
-        "@lvgl"
-    } else {
-        "@other"
+/// The config directory Claude Code runs from: CLAUDE_CONFIG_DIR (`env`) if set;
+/// else the one the transcript sits in (<config dir>/projects/<project>/<id>.jsonl),
+/// as Claude Code leaves the variable unset for the default; else ~/.claude.
+pub fn config_dir(env: Option<&str>, v: &Value, home: Option<&str>) -> Option<PathBuf> {
+    if let Some(dir) = env.filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    let transcript = text(v, &["transcript_path"], "");
+    let projects = Path::new(&transcript).parent().and_then(Path::parent);
+    if let Some(projects) = projects.filter(|p| p.file_name().is_some_and(|n| n == "projects")) {
+        return projects.parent().map(Path::to_path_buf);
+    }
+    home.map(|h| Path::new(h).join(".claude"))
+}
+
+/// The account a config dir belongs to: the first line of its ACCOUNT_FILE
+/// (`file`, its contents), so every machine can name its own dirs; without one,
+/// the dir's name: `.claude-herta` -> "herta", `.claude` -> "default".
+pub fn account_name(dir: Option<&Path>, file: Option<&str>) -> String {
+    if let Some(name) = file.and_then(|f| f.lines().next()).map(str::trim) {
+        if !name.is_empty() {
+            return name.to_owned();
+        }
+    }
+    let base = dir
+        .and_then(Path::file_name)
+        .and_then(|n| n.to_str())
+        .unwrap_or("?");
+    match base.strip_prefix(".claude") {
+        Some("") => "default".to_owned(),
+        Some(rest) if rest.starts_with('-') && rest.len() > 1 => rest[1..].to_owned(),
+        _ => base.to_owned(),
     }
 }
 
@@ -211,16 +318,10 @@ fn folder_of(cwd: &str) -> String {
         .unwrap_or_else(|| cwd.to_owned())
 }
 
-/// Render the full status line from the status JSON, the current unix time and
-/// CLAUDE_CONFIG_DIR (`None` when it is unset).
-pub fn render(v: &Value, now: i64, config_dir: Option<&str>) -> String {
+/// Render the status line from the status JSON, the current unix time, the
+/// account name and the terminal width (`None` when unknown).
+pub fn render(v: &Value, now: i64, account: &str, columns: Option<usize>) -> String {
     let model = model_family(&text(v, &["model", "display_name"], "?"));
-    // the env var is authoritative; the transcript path (it lives in
-    // <config dir>/projects/) covers the case where it doesn't reach us
-    let tag = match config_dir.filter(|d| !d.is_empty()) {
-        Some(d) => config_tag(d),
-        None => config_tag(&text(v, &["transcript_path"], "")),
-    };
 
     // .workspace.current_dir // .cwd // "?"
     let cwd = {
@@ -244,23 +345,30 @@ pub fn render(v: &Value, now: i64, config_dir: Option<&str>) -> String {
     let seven = num(v, &["rate_limits", "seven_day", "used_percentage"], -1.0) as i64;
     let seven_reset = num(v, &["rate_limits", "seven_day", "resets_at"], 0.0) as i64;
 
-    let mut out =
-        format!("{BOLD}{MAG}🤖 {model}{RESET} {DIM}{tag}{RESET}{SEP}{CYAN}📁 {folder}{RESET}{SEP}");
+    let top = [
+        Seg::Text(format!(
+            "{BOLD}{MAG}🤖 {model}{RESET}{SEP}{CYAN}📁 {folder}{RESET}{SEP}{YEL}👤 {account}{RESET}{SEP}🧠 "
+        )),
+        Seg::Bar(ctx),
+        Seg::Text(pct_label(ctx)),
+    ];
 
-    // context: bar normally, but only the % if any limit is in the red zone
-    if five > 90 || seven > 90 {
-        out.push_str(&format!("🧠 {}{ctx}%{RESET}", color_for(ctx)));
-    } else {
-        out.push_str(&format!("🧠 {}", bar(ctx)));
-    }
-
+    let mut limits = Vec::new();
     if five >= 0 {
-        out.push_str(&format!("{SEP}{}", metric("⏳", five, five_reset, now)));
+        limits.extend(metric("⏳", five, five_reset, now));
     }
     if seven >= 0 {
-        out.push_str(&format!("{SEP}{}", metric("📅", seven, seven_reset, now)));
+        if !limits.is_empty() {
+            limits.push(Seg::Text(SEP.to_owned()));
+        }
+        limits.extend(metric("📅", seven, seven_reset, now));
     }
 
+    let mut out = layout(&top, columns);
+    if !limits.is_empty() {
+        out.push('\n');
+        out.push_str(&layout(&limits, columns));
+    }
     out
 }
 
@@ -292,6 +400,11 @@ mod tests {
         out
     }
 
+    /// `render` at no known width, as plain text.
+    fn plain(v: &Value, now: i64) -> String {
+        strip(&render(v, now, "akos", None))
+    }
+
     /// A single five-hour metric at `pct`, resetting at FAR, plus model/ctx.
     fn with_five(pct: i64, reset: i64) -> Value {
         json!({
@@ -299,6 +412,27 @@ mod tests {
             "context_window": {"used_percentage": 40},
             "rate_limits": {"five_hour": {"used_percentage": pct, "resets_at": reset}}
         })
+    }
+
+    /// Both limits, for the two-line layout.
+    fn with_both(ctx: i64, five: i64, seven: i64) -> Value {
+        json!({
+            "model": {"display_name": "Opus 4.8"},
+            "workspace": {"current_dir": "/home/me/claude-status"},
+            "context_window": {"used_percentage": ctx},
+            "rate_limits": {
+                "five_hour": {"used_percentage": five, "resets_at": FAR},
+                "seven_day": {"used_percentage": seven, "resets_at": FAR}
+            }
+        })
+    }
+
+    /// The bars' widths in a rendered line, in cells.
+    fn bar_widths(line: &str) -> Vec<usize> {
+        line.split('[')
+            .skip(1)
+            .map(|b| b.chars().take_while(|&c| c == CELL).count())
+            .collect()
     }
 
     #[test]
@@ -322,17 +456,66 @@ mod tests {
     }
 
     #[test]
-    fn full_line_green_zone() {
-        let s = strip(&render(&with_five(30, FAR), NOW, None));
+    fn full_lines_green_zone() {
         assert_eq!(
-            s,
-            "🤖 Opus @other  📁 ?  🧠 [████░░░░░░]  40%  ⏳ 4d [███░░░░░░░]  30%"
+            plain(&with_five(30, FAR), NOW),
+            "🤖 Opus  📁 ?  👤 akos  🧠 [▆▆▆▆▆▆▆▆▆▆]  40%\n⏳ 4d [▆▆▆▆▆▆▆▆▆▆]  30%"
         );
     }
 
     #[test]
+    fn bar_fills_in_the_threshold_color_and_empties_in_grey() {
+        assert_eq!(
+            bar(42, 10),
+            format!("{RESET}[{GRN}▆▆▆▆{RESET}{GREY}▆▆▆▆▆▆{RESET}]")
+        );
+        assert_eq!(
+            bar(80, 5),
+            format!("{RESET}[{YEL}▆▆▆▆{RESET}{GREY}▆{RESET}]")
+        );
+        assert_eq!(
+            bar(150, 4),
+            format!("{RESET}[{RED}▆▆▆▆{RESET}{GREY}{RESET}]")
+        ); // clamped
+    }
+
+    #[test]
+    fn bars_fill_the_width_less_the_margin() {
+        for columns in [60, 97, 140] {
+            let out = render(&with_both(30, 55, 20), NOW, "akos", Some(columns));
+            for line in out.lines() {
+                assert_eq!(
+                    visible_width(line),
+                    columns - MARGIN,
+                    "{columns}: {}",
+                    strip(line)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_limits_share_their_line_evenly() {
+        let out = strip(&render(&with_both(30, 55, 20), NOW, "akos", Some(97)));
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(bar_widths(lines[0]), [46]); // 92 - 46 cells of text
+                                                // 64 free cells, split between the two bars
+        assert_eq!(bar_widths(lines[1]), [32, 32]);
+        // filled to the percentage of each bar's own width
+        assert!(lines[1].contains(&format!("[{}", "▆".repeat(32))));
+    }
+
+    #[test]
+    fn narrow_terminal_keeps_min_bar() {
+        let out = strip(&render(&with_both(30, 55, 20), NOW, "akos", Some(20)));
+        for line in out.lines() {
+            assert!(bar_widths(line).iter().all(|&w| w == MIN_BAR), "{line}");
+        }
+    }
+
+    #[test]
     fn green_countdown_is_one_unit_and_green() {
-        let out = render(&with_five(30, FAR), NOW, None);
+        let out = render(&with_five(30, FAR), NOW, "akos", None);
         assert!(strip(&out).contains("⏳ 4d [")); // one unit, then the bar
         assert!(out.contains(&format!("{GRN}4d{RESET}"))); // colored to match
     }
@@ -340,7 +523,7 @@ mod tests {
     #[test]
     fn yellow_zone_76_to_90() {
         for pct in [76, 80, 90] {
-            let out = render(&with_five(pct, FAR), NOW, None);
+            let out = render(&with_five(pct, FAR), NOW, "akos", None);
             assert!(strip(&out).contains("⏳ 4d [")); // still one unit
             assert!(out.contains(&format!("{YEL}4d{RESET}")));
         }
@@ -348,7 +531,7 @@ mod tests {
 
     #[test]
     fn red_zone_switches_to_two_units_and_stays_static_below_95() {
-        let out = render(&with_five(92, FAR), NOW, None);
+        let out = render(&with_five(92, FAR), NOW, "akos", None);
         assert!(strip(&out).contains("⏳ 4d 15h [")); // two units, bar present
         assert!(out.contains(&format!("{RED}4d 15h{RESET}")));
         assert!(!out.contains(DRED)); // 92 < 95 -> not flashing
@@ -357,39 +540,34 @@ mod tests {
     #[test]
     fn flashing_at_95_pulses_on_odd_seconds() {
         // bar is still present in the 95–99 band
-        assert!(strip(&render(&with_five(95, FAR), NOW, None)).contains("⏳ 4d 15h ["));
+        assert!(plain(&with_five(95, FAR), NOW).contains("⏳ 4d 15h ["));
         // even second -> bright red, no dark-red anywhere
-        assert!(!render(&with_five(95, FAR), NOW, None).contains(DRED));
+        assert!(!render(&with_five(95, FAR), NOW, "akos", None).contains(DRED));
         // odd second -> countdown pulses to dark red
-        assert!(render(&with_five(95, FAR), NOW + 1, None).contains(DRED));
+        assert!(render(&with_five(95, FAR), NOW + 1, "akos", None).contains(DRED));
     }
 
     #[test]
     fn over_limit_drops_bar_shows_flag_and_percent() {
-        let s = strip(&render(&with_five(100, FAR), NOW, None));
-        assert!(s.contains("⏳ ⛔ 100% 4d 15h")); // ⛔, %, then countdown
-        assert!(!s.contains('[')); // no bar anywhere (ctx also collapses)
-        // and >135% keeps rendering the real percentage
-        assert!(strip(&render(&with_five(135, FAR), NOW, None)).contains("⛔ 135%"));
+        let s = plain(&with_five(100, FAR), NOW);
+        let limits = s.lines().nth(1).unwrap();
+        assert_eq!(limits, "⏳ ⛔ 100% 4d 15h"); // ⛔, %, then countdown, no bar
+                                                 // and >135% keeps rendering the real percentage
+        assert!(plain(&with_five(135, FAR), NOW).contains("⛔ 135%"));
     }
 
     #[test]
-    fn context_collapses_when_a_limit_is_red() {
+    fn context_keeps_its_bar_when_a_limit_is_red() {
         let v = json!({
             "model": {"display_name": "Opus"},
             "context_window": {"used_percentage": 96},
-            "rate_limits": {"five_hour": {"used_percentage": 92, "resets_at": FAR}}
+            "rate_limits": {"five_hour": {"used_percentage": 100, "resets_at": FAR}}
         });
-        let s = strip(&render(&v, NOW, None));
-        assert!(s.contains("🧠 96%")); // raw percentage, no bar
-        assert!(!s.contains("🧠 [")); // bar collapsed away
-    }
-
-    #[test]
-    fn context_keeps_bar_at_exactly_90() {
-        // 90 is yellow, not red -> no collapse
-        let s = strip(&render(&with_five(90, FAR), NOW, None));
-        assert!(s.contains("🧠 [████░░░░░░]  40%"));
+        let out = strip(&render(&v, NOW, "akos", Some(60)));
+        let top = out.lines().next().unwrap();
+        assert!(top.contains("🧠 [▆")); // bar stays, there is room for it
+        assert!(top.ends_with("]  96%"));
+        assert_eq!(visible_width(top), 60 - MARGIN); // and still stretches
     }
 
     #[test]
@@ -400,57 +578,84 @@ mod tests {
             "context_window": {"used_percentage": 33},
             "rate_limits": {"seven_day": {"used_percentage": 50, "resets_at": FAR}}
         });
-        let s = strip(&render(&v, NOW, None));
-        assert!(s.contains("📅 4d ["));
+        let s = plain(&v, NOW);
+        assert!(s.lines().nth(1).unwrap().starts_with("📅 4d ["));
         assert!(!s.contains('⏳')); // five_hour absent -> omitted
     }
 
     #[test]
+    fn no_limits_means_one_line() {
+        let v =
+            json!({"model": {"display_name": "Opus"}, "context_window": {"used_percentage": 10}});
+        assert_eq!(render(&v, NOW, "akos", Some(80)).lines().count(), 1);
+    }
+
+    #[test]
     fn no_reset_means_no_countdown() {
-        let s = strip(&render(&with_five(20, 0), NOW, None));
+        let s = plain(&with_five(20, 0), NOW);
         assert!(s.contains("⏳ [")); // bar immediately after icon, no countdown
     }
 
     #[test]
     fn model_family_and_cwd_fallback() {
-        assert!(strip(&render(
-            &json!({"model": {"display_name": "Haiku 4.5"}}),
-            NOW,
-            None
-        ))
-        .contains("🤖 Haiku"));
+        assert!(plain(&json!({"model": {"display_name": "Haiku 4.5"}}), NOW).contains("🤖 Haiku"));
         // top-level cwd fallback + basename
-        let s = strip(&render(&json!({"cwd": "/var/log/app"}), NOW, None));
-        assert!(s.contains("📁 app"));
+        assert!(plain(&json!({"cwd": "/var/log/app"}), NOW).contains("📁 app"));
     }
 
     #[test]
-    fn config_dir_tag() {
-        assert_eq!(config_tag("/home/me/.claude/projects/x/s.jsonl"), "@lvgl");
+    fn config_dir_resolution() {
+        let home = Some("/home/me");
+        let v = json!({"transcript_path": "/home/me/.claude-herta/projects/-x/s.jsonl"});
+        // the env var wins
         assert_eq!(
-            config_tag("/home/me/.claude-akos/projects/x/s.jsonl"),
-            "@akos"
+            config_dir(Some("/home/me/.claude-lvgl"), &v, home),
+            Some(PathBuf::from("/home/me/.claude-lvgl"))
+        );
+        // then the transcript's config dir (an empty env var counts as unset)
+        assert_eq!(
+            config_dir(Some(""), &v, home),
+            Some(PathBuf::from("/home/me/.claude-herta"))
+        );
+        // then ~/.claude
+        let other = json!({"transcript_path": "/elsewhere/s.jsonl"});
+        assert_eq!(
+            config_dir(None, &other, home),
+            Some(PathBuf::from("/home/me/.claude"))
+        );
+        assert_eq!(config_dir(None, &Value::Null, None), None);
+    }
+
+    #[test]
+    fn account_name_from_file_or_dir() {
+        let dir = |d| Some(Path::new(d));
+        // the file decides, whatever the dir is called
+        assert_eq!(
+            account_name(dir("/home/me/.claude"), Some("akos\n")),
+            "akos"
         );
         assert_eq!(
-            config_tag("/home/me/.claude-herta/projects/x/s.jsonl"),
-            "@herta"
+            account_name(dir("/home/me/.claude"), Some("  lvgl  \nrest")),
+            "lvgl"
         );
-        assert_eq!(config_tag("/opt/cfg/projects/x/s.jsonl"), "@other");
-        assert_eq!(config_tag(""), "@other"); // field missing
-        assert_eq!(config_tag("/home/me/.claude-akos/"), "@akos"); // env var form
-        assert_eq!(config_tag("/home/me/.claude-herta/"), "@herta");
-        assert_eq!(config_tag("/home/me/.claude"), "@lvgl"); // no trailing slash
-        let v = json!({"transcript_path": "/home/me/.claude-akos/projects/x/s.jsonl"});
-        assert!(strip(&render(&v, NOW, None)).starts_with("🤖 ? @akos "));
-        // the env var wins over the transcript path
-        let s = strip(&render(&v, NOW, Some("/home/me/.claude")));
-        assert!(s.starts_with("🤖 ? @lvgl "));
+        // no file, or a blank one: the dir's name
+        assert_eq!(account_name(dir("/home/me/.claude"), None), "default");
+        assert_eq!(
+            account_name(dir("/home/me/.claude-herta/"), Some("\n")),
+            "herta"
+        );
+        assert_eq!(account_name(dir("/opt/cfg"), None), "cfg");
+        assert_eq!(account_name(dir("/home/me/.claude-"), None), ".claude-");
+        assert_eq!(account_name(None, None), "?");
+        assert!(plain(&Value::Null, NOW).contains("👤 akos"));
     }
 
     #[test]
     fn malformed_input_degrades_to_defaults() {
         // Value::Null is what main() falls back to on unparseable stdin
-        let s = strip(&render(&Value::Null, NOW, None));
-        assert_eq!(s, "🤖 ? @other  📁 ?  🧠 [░░░░░░░░░░]   0%");
+        assert_eq!(
+            plain(&Value::Null, NOW),
+            "🤖 ?  📁 ?  👤 akos  🧠 [▆▆▆▆▆▆▆▆▆▆]   0%"
+        );
     }
 }
