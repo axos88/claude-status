@@ -48,6 +48,10 @@ both how full a limit is and how long until it clears:
 | 95–99% | 🔴 red | 2 units | ⚡ pulses red↔dark-red | ✓ |
 | ≥ 100% | 🔴 red | 2 units | ⚡ | dropped → `⛔ 100% 4d 15h` |
 
+It began life as a bash + `jq` script; at ~1 ms per invocation this Rust
+rewrite is roughly 20–40× faster, and renders without any external binaries
+(only the self-update below uses `curl` and `tar`).
+
 ### The account
 
 Several Claude Code accounts can live on one machine, each in its own config dir
@@ -63,10 +67,6 @@ echo home > ~/.claude-home/account-name
 name is used: `.claude-home` → `home`, `.claude` → `default`. The config dir is
 `CLAUDE_CONFIG_DIR`, or, as Claude Code leaves that unset for the default, the
 one the session's transcript sits in, or else `~/.claude`.
-
-It began life as a bash + `jq` script; at ~1 ms per invocation this Rust
-rewrite is roughly 20–40× faster, and renders without any external binaries
-(only the self-update below uses `curl` and `tar`).
 
 ### Updates
 
@@ -113,8 +113,10 @@ and add it to my PATH if needed; on Windows use a suitable PATH location) and ma
 it executable. Then merge a statusLine entry into ~/.claude/settings.json without
 disturbing my other settings:
   "statusLine": { "type": "command", "command": "<path to the binary>", "refreshInterval": 1 }
-Finally, confirm it works by piping the binary a sample status JSON and showing me
-the rendered line.
+If I have several Claude config dirs (~/.claude, ~/.claude-*), ask me what to call
+each account and write that name into an account-name file in each dir. Finally,
+confirm it works by piping the binary a sample status JSON and showing me the
+rendered line.
 ```
 
 Prefer to do it yourself? Use one of the methods below.
@@ -184,22 +186,25 @@ cargo test
 `render()` is pure over `(JSON, now, account, width)`, so the tests in `src/lib.rs` drive it with
 a fixed clock and assert exact output across every branch — the color/unit
 thresholds (75, 90), the flashing zone (95, checked on both even and odd seconds
-via `now`), the over-limit layout, the bars filling the width, missing metrics,
-the cwd fallback, the account resolution, and malformed input degrading to
-defaults.
+via `now`), the over-limit layout, the bars filling the width, the choice between
+one line, one line without the model and two lines (at its exact boundaries),
+missing metrics, the cwd fallback, the account resolution, and malformed input
+degrading to defaults. The tests in `src/update.rs` cover the update's interval
+and its variable, the asset name per platform, and the checksum parsing.
 
 ## Releases
 
 Every push to `main`/`master` runs [`.github/workflows/release.yml`](.github/workflows/release.yml),
 which rebuilds all targets and refreshes a single rolling **`latest`** GitHub
 Release with the fresh binaries (and their `sha256` checksums) — so the download
-commands above always fetch the newest build. No manual tagging needed.
+commands above always fetch the newest build, and installed release binaries
+pick it up by themselves (see [Updates](#updates)). No manual tagging needed.
 
 The [release profile](Cargo.toml) is tuned for a small binary — `opt-level="z"`,
 fat LTO, a single codegen unit, and `panic="abort"` — but deliberately keeps the
 symbol table (`strip="debuginfo"`) so **panic backtraces still resolve to
 function names** on Linux and macOS. Full DWARF is dropped, which shrinks the
-Linux x86_64 binary from ~2 MB to ~410 KB; a panic still prints its exact source
+Linux x86_64 binary from ~2 MB to ~540 KB; a panic still prints its exact source
 location plus a symbolicated stack (set `RUST_BACKTRACE=1`). (On Windows, symbols
 live in a separate `.pdb` that the release archive doesn't ship, so backtrace
 frames there show addresses only — the panic location is still printed.)
