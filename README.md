@@ -7,14 +7,14 @@ status JSON to **stdin** and using **stdout** as the status line. This binary
 reads that JSON and prints a line, its bars stretched to the terminal's width:
 
 ```
-🤖 Opus  📁 claude-status  👤 akos  🧠 [▆▆▆▆▆▆▆▆▆▆]  63%  ⏳ 4d [▆▆▆▆▆▆▆▆▆]  45%  📅 2h [▆▆▆▆▆▆▆▆▆]  72%
+👤 akos  📁 claude-status  🤖 Opus  🧠 [▆▆▆▆▆▆▆▆▆▆]  63%  ⏳ 4d [▆▆▆▆▆▆▆▆▆]  45%  📅 2h [▆▆▆▆▆▆▆▆▆]  72%
 ```
 
 When the terminal is too narrow for that, it drops the model; when it is
 narrower still, it wraps onto two lines:
 
 ```
-🤖 Opus  📁 claude-status  👤 akos  🧠 [▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆]  63%
+👤 akos  📁 claude-status  🤖 Opus  🧠 [▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆]  63%
 ⏳ 4d [▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆]  45%  📅 2h [▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆]  72%
 ```
 
@@ -22,7 +22,7 @@ narrower still, it wraps onto two lines:
 
 <sub>The same status bar at three usage levels: comfortable, tightening, and over the 5-hour limit.</sub>
 
-- 🤖 model family · 📁 current folder · 👤 account · 🧠 context window ·
+- 👤 account · 📁 current folder · 🤖 model family · 🧠 context window ·
   ⏳ 5-hour limit · 📅 7-day limit (the limits omitted when Claude Code reports
   none, e.g. on an API key)
 - One line as long as every bar gets at least 7 cells on it; else one line

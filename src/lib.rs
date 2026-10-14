@@ -1,11 +1,11 @@
 // Claude Code status line renderer.
 //
 // `render` turns the status-line JSON into one line:
-//   🤖 <family>  📁 <folder>  👤 <account>  🧠 <ctx>  ⏳ <5h>  📅 <7d>
+//   👤 <account>  📁 <folder>  🤖 <family>  🧠 <ctx>  ⏳ <5h>  📅 <7d>
 // the limits only when Claude Code reports them. Where that leaves a bar under
 // ONE_LINE_BAR cells, the model goes; where that doesn't help either, the
 // limits move to a second line:
-//   🤖 <family>  📁 <folder>  👤 <account>  🧠 <ctx>
+//   👤 <account>  📁 <folder>  🤖 <family>  🧠 <ctx>
 //   ⏳ <5h>  📅 <7d>
 //
 // Each usage metric renders as:  icon  reset-countdown  progress-bar  pct%,
@@ -362,11 +362,12 @@ pub fn render(v: &Value, now: i64, account: &str, columns: Option<usize>) -> Str
     let seven = num(v, &["rate_limits", "seven_day", "used_percentage"], -1.0) as i64;
     let seven_reset = num(v, &["rate_limits", "seven_day", "resets_at"], 0.0) as i64;
 
+    let place = Seg::Text(format!(
+        "{YEL}👤 {account}{RESET}{SEP}{CYAN}📁 {folder}{RESET}{SEP}"
+    ));
     let model = Seg::Text(format!("{BOLD}{MAG}🤖 {model}{RESET}{SEP}"));
     let context = [
-        Seg::Text(format!(
-            "{CYAN}📁 {folder}{RESET}{SEP}{YEL}👤 {account}{RESET}{SEP}🧠 "
-        )),
+        Seg::Text("🧠 ".to_owned()),
         Seg::Bar(ctx),
         Seg::Text(pct_label(ctx)),
     ];
@@ -382,9 +383,10 @@ pub fn render(v: &Value, now: i64, account: &str, columns: Option<usize>) -> Str
         limits.extend(metric("📅", seven, seven_reset, now));
     }
 
-    // the context, after the model if `with_model`, before the limits if `with_limits`
+    // account and folder, the model if `with_model`, the context, and the limits
+    // if `with_limits`
     let line = |with_model: bool, with_limits: bool| {
-        let mut line = Vec::new();
+        let mut line = vec![place.clone()];
         if with_model {
             line.push(model.clone());
         }
@@ -501,7 +503,7 @@ mod tests {
     fn full_line_green_zone() {
         assert_eq!(
             plain(&with_five(30, FAR), NOW),
-            "🤖 Opus  📁 ?  👤 akos  🧠 [▆▆▆▆▆▆▆▆▆▆]  40%  ⏳ 4d [▆▆▆▆▆▆▆▆▆▆]  30%"
+            "👤 akos  📁 ?  🤖 Opus  🧠 [▆▆▆▆▆▆▆▆▆▆]  40%  ⏳ 4d [▆▆▆▆▆▆▆▆▆▆]  30%"
         );
     }
 
@@ -513,13 +515,13 @@ mod tests {
         // 102 - 76 - MARGIN = 21: three bars of 7, model and all
         let s = at(102);
         assert_eq!(s.lines().count(), 1);
-        assert!(s.starts_with("🤖 Opus  📁 claude-status"));
+        assert!(s.starts_with("👤 akos  📁 claude-status  🤖 Opus  🧠 ["));
         assert_eq!(bar_widths(&s), [7, 7, 7]);
 
         // one cell short: the model goes, the bars get its room
         let s = at(101);
         assert_eq!(s.lines().count(), 1);
-        assert!(s.starts_with("📁 claude-status"));
+        assert!(s.starts_with("👤 akos  📁 claude-status  🧠 ["));
         assert_eq!(bar_widths(&s), [10, 10, 9]);
 
         // 93 - 67 - MARGIN = 21: still one line, without the model
@@ -530,7 +532,7 @@ mod tests {
         // one cell short again: two lines, the model back
         let s = at(92);
         assert_eq!(s.lines().count(), 2);
-        assert!(s.starts_with("🤖 Opus  📁 claude-status"));
+        assert!(s.starts_with("👤 akos  📁 claude-status  🤖 Opus  🧠 ["));
     }
 
     #[test]
@@ -722,7 +724,7 @@ mod tests {
         // Value::Null is what main() falls back to on unparseable stdin
         assert_eq!(
             plain(&Value::Null, NOW),
-            "🤖 ?  📁 ?  👤 akos  🧠 [▆▆▆▆▆▆▆▆▆▆]   0%"
+            "👤 akos  📁 ?  🤖 ?  🧠 [▆▆▆▆▆▆▆▆▆▆]   0%"
         );
     }
 }
