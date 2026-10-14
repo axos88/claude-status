@@ -66,12 +66,12 @@ one the session's transcript sits in, or else `~/.claude`.
 
 It began life as a bash + `jq` script; at ~1 ms per invocation this Rust
 rewrite is roughly 20–40× faster, and renders without any external binaries
-(only the daily update below uses `curl` and `tar`).
+(only the self-update below uses `curl` and `tar`).
 
 ### Updates
 
-A prebuilt binary from the release keeps itself up to date: once a day, after
-printing the status line, it starts `claude-status --update` in the background
+A prebuilt binary from the release keeps itself up to date: every 2 hours,
+after printing the status line, it starts `claude-status --update` in the background
 (the status line never waits for it). That fetches the release's `.sha256` for
 the platform and, when it differs from the one installed last, downloads the
 archive, verifies it and renames the new binary over the old one. Sessions
@@ -86,11 +86,12 @@ Only the release builds do this (the workflow compiles them with
 `CLAUDE_STATUS_RELEASE` set), so a binary built from source is never overwritten
 by the release.
 
-To turn it off, set `CLAUDE_STATUS_NO_UPDATE` (to anything but `0`) for Claude
-Code, e.g. in `~/.claude/settings.json`:
+`CLAUDE_STATUS_AUTOUPDATE_INTERVAL` sets how often, in seconds (default
+`7200`; not a number: the default); `0` turns it off. Set it for Claude Code,
+e.g. in `~/.claude/settings.json`:
 
 ```json
-"env": { "CLAUDE_STATUS_NO_UPDATE": "1" }
+"env": { "CLAUDE_STATUS_AUTOUPDATE_INTERVAL": "0" }
 ```
 
 `claude-status --update` still updates when run by hand.

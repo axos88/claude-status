@@ -75,7 +75,7 @@ jobs:
       # (.tar.gz on unix, .zip on windows) and uploads it to the `latest`
       # release created above.
       - uses: taiki-e/upload-rust-binary-action@v1
-        # makes these builds update themselves daily (src/update.rs); `cross`
+        # makes these builds update themselves (src/update.rs); `cross`
         # passes it into its container too (Cross.toml)
         env:
           CLAUDE_STATUS_RELEASE: "1"

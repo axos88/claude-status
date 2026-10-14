@@ -1,11 +1,13 @@
-// Daily self-update from the rolling `latest` GitHub release.
+// Periodic self-update from the rolling `latest` GitHub release.
 //
 // Only release builds update themselves: the release workflow compiles them with
 // CLAUDE_STATUS_RELEASE set. A local `cargo build` / `cargo install` doesn't, so
-// a binary built from source is never overwritten by the (older) release. And
-// CLAUDE_STATUS_NO_UPDATE turns it off at run time.
+// a binary built from source is never overwritten by the (older) release. How
+// often (by default every 2 hours) is CLAUDE_STATUS_AUTOUPDATE_INTERVAL's, at
+// run time; 0 turns it off.
 //
-// `spawn_if_due` runs after the status line is printed: once a day it starts
+// `spawn_if_due` runs after the status line is printed: when an update is due it
+// starts
 // `claude-status --update` detached in the background, so the status line never
 // waits on the network. That process (`run`) fetches the asset's .sha256 — a few
 // bytes — and only when it differs from the one it installed last downloads the
@@ -27,10 +29,11 @@ use sha2::{Digest, Sha256};
 pub const FLAG: &str = "--update";
 
 const RELEASE_BUILD: bool = option_env!("CLAUDE_STATUS_RELEASE").is_some();
-/// Set (to anything but "" or "0"), the daily update is off; `--update` still works.
-const NO_UPDATE_VAR: &str = "CLAUDE_STATUS_NO_UPDATE";
+/// Seconds between updates; 0 turns them off (`--update` still works).
+const INTERVAL_VAR: &str = "CLAUDE_STATUS_AUTOUPDATE_INTERVAL";
+/// The interval when INTERVAL_VAR is unset, or not a number.
+const DEFAULT_INTERVAL: Duration = Duration::from_secs(2 * 60 * 60);
 const BASE_URL: &str = "https://github.com/axos88/claude-status/releases/latest/download";
-const INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Touched when an update is started; its age says when the next one is due.
 const STAMP: &str = "last-check";
@@ -69,11 +72,22 @@ fn state_dir() -> Option<PathBuf> {
     Some(base.join("claude-status"))
 }
 
-/// Whether a check is due, the last one having been started at `last` (`None`:
-/// never). A `last` in the future (the clock went back) counts as due too.
-fn is_due(last: Option<SystemTime>, now: SystemTime) -> bool {
+/// The interval between updates INTERVAL_VAR (holding `value`) asks for; `None`:
+/// updates are off.
+fn interval(value: Option<&str>) -> Option<Duration> {
+    match value.and_then(|v| v.trim().parse::<u64>().ok()) {
+        Some(0) => None,
+        Some(secs) => Some(Duration::from_secs(secs)),
+        None => Some(DEFAULT_INTERVAL),
+    }
+}
+
+/// Whether an update is due, `interval` after the last one, which was started
+/// at `last` (`None`: never). A `last` in the future (the clock went back)
+/// counts as due too.
+fn is_due(last: Option<SystemTime>, now: SystemTime, interval: Duration) -> bool {
     match last.map(|last| now.duration_since(last)) {
-        Some(Ok(age)) => age >= INTERVAL,
+        Some(Ok(age)) => age >= interval,
         _ => true,
     }
 }
@@ -85,11 +99,6 @@ fn parse_checksum(file: &str) -> Option<String> {
         .then(|| hex.to_ascii_lowercase())
 }
 
-/// Whether NO_UPDATE_VAR, holding `value`, turns the daily update off.
-fn disabled(value: Option<&str>) -> bool {
-    value.is_some_and(|v| !v.is_empty() && v != "0")
-}
-
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -97,17 +106,20 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// Start `<this binary> --update` in the background if a release build's daily
-/// check is due and not turned off. Never fails: the status line must not suffer
-/// for it.
+/// Start `<this binary> --update` in the background if a release build's update
+/// is due (and not turned off). Never fails: the status line must not suffer for
+/// it.
 pub fn spawn_if_due() {
-    if !RELEASE_BUILD || disabled(std::env::var(NO_UPDATE_VAR).ok().as_deref()) {
+    if !RELEASE_BUILD {
         return;
     }
+    let Some(interval) = interval(std::env::var(INTERVAL_VAR).ok().as_deref()) else {
+        return;
+    };
     let Some(dir) = state_dir() else { return };
     let stamp = dir.join(STAMP);
     let last = fs::metadata(&stamp).and_then(|m| m.modified()).ok();
-    if !is_due(last, SystemTime::now()) {
+    if !is_due(last, SystemTime::now(), interval) {
         return;
     }
     // stamp first, so the sessions refreshing every second don't all start one
@@ -266,22 +278,30 @@ mod tests {
     }
 
     #[test]
-    fn due_once_a_day() {
+    fn due_after_the_interval() {
         let now = UNIX_EPOCH + Duration::from_secs(1_000_000_000);
-        assert!(is_due(None, now)); // never checked
-        assert!(!is_due(Some(now - Duration::from_secs(3600)), now));
-        assert!(!is_due(Some(now - INTERVAL + Duration::from_secs(1)), now));
-        assert!(is_due(Some(now - INTERVAL), now));
-        assert!(is_due(Some(now + Duration::from_secs(60)), now)); // clock went back
+        let hour = Duration::from_secs(3600);
+        assert!(is_due(None, now, hour)); // never checked
+        assert!(!is_due(
+            Some(now - hour + Duration::from_secs(1)),
+            now,
+            hour
+        ));
+        assert!(is_due(Some(now - hour), now, hour));
+        assert!(is_due(Some(now + Duration::from_secs(60)), now, hour)); // clock went back
     }
 
     #[test]
-    fn env_var_turns_it_off() {
-        assert!(!disabled(None));
-        assert!(!disabled(Some("")));
-        assert!(!disabled(Some("0")));
-        assert!(disabled(Some("1")));
-        assert!(disabled(Some("true")));
+    fn interval_from_the_env_var() {
+        assert_eq!(interval(None), Some(DEFAULT_INTERVAL));
+        assert_eq!(interval(Some("0")), None); // off
+        assert_eq!(interval(Some(" 0 ")), None);
+        assert_eq!(interval(Some("600")), Some(Duration::from_secs(600)));
+        assert_eq!(DEFAULT_INTERVAL, Duration::from_secs(7200));
+        // not a number: the default
+        assert_eq!(interval(Some("")), Some(DEFAULT_INTERVAL));
+        assert_eq!(interval(Some("2h")), Some(DEFAULT_INTERVAL));
+        assert_eq!(interval(Some("-1")), Some(DEFAULT_INTERVAL));
     }
 
     #[test]
